@@ -21,4 +21,5 @@ from django.urls import path, include
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("", include("todo.urls")),  # todoアプリのURLを取り込む
+    path("polls/", include("polls.urls"))
 ]
