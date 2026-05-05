@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>TODO</title>
+</head>
+<body>
+    <h1>📝 TODO</h1>
+
+    <form method="post" action="{% url 'task_create' %}">
+        {% csrf_token %}
+        <input type="text" name="title" placeholder="タスクを入力" required>
+        <button type="submit">追加</button>
+    </form>
+
+    {% for task in tasks %}
+    <div class="task">
+        <a href="{% url 'task_toggle' task.id %}">
+            <span class="{% if task.is_done %}done{% endif %}">
+                {% if task.is_done %}✓{% else %}○{% endif %} {{ task.title }}
+            </span>
+        </a>
+    </div>
+    {% empty %}
+    <p>タスクはまだありません</p>
+    {% endfor %}
+</body>
+</html>
