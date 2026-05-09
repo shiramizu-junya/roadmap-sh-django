@@ -37,4 +37,6 @@ class SQLFormatter(logging.Formatter):
 
         timestamp = self.formatTime(record, self.datefmt)
         header = f"[{timestamp}] ({duration:.3f}s) [{alias}]"
-        return f"{header}\n{colored_sql.rstrip()}"
+        # 末尾に改行を 1 つ足してクエリ間に空行を作る
+        # （StreamHandler の terminator='\n' と合わせて 2 連続改行になる）
+        return f"{header}\n{colored_sql.rstrip()}\n"
