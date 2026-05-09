@@ -8,3 +8,10 @@ dependencies = [
     "mysqlclient>=2.2.8",
     "python-dotenv>=1.2.2",
 ]
+
+[dependency-groups]
+dev = [
+    "django-debug-toolbar>=6.3.0",
+    "pygments>=2.18.0",
+    "werkzeug>=3.1.8",
+]

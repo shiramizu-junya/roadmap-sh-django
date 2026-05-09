@@ -47,6 +47,9 @@ INSTALLED_APPS = [
     "polls",
 ]
 
+if DEBUG:
+    INSTALLED_APPS += ["debug_toolbar"]
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -56,6 +59,11 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+if DEBUG:
+    MIDDLEWARE.insert(0, "debug_toolbar.middleware.DebugToolbarMiddleware")
+
+INTERNAL_IPS = ["127.0.0.1"]
 
 ROOT_URLCONF = "config.urls"
 
@@ -130,3 +138,51 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+
+
+# Local development: SQL query logging
+# https://docs.djangoproject.com/en/6.0/topics/logging/
+if DEBUG:
+    # 接続初期化やマイグレーション確認など、アプリ由来でない SQL は除外する
+    _DB_INTERNAL_SQL_MARKERS = (
+        "information_schema",
+        "django_migrations",
+        "@@sql_mode",
+        "SET SESSION TRANSACTION",
+    )
+
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "filters": {
+            "skip_db_internals": {
+                "()": "django.utils.log.CallbackFilter",
+                "callback": lambda record: not any(
+                    marker in record.getMessage()
+                    for marker in _DB_INTERNAL_SQL_MARKERS
+                ),
+            },
+        },
+        "formatters": {
+            "sql": {
+                "()": "config.log_formatters.SQLFormatter",
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "sql",
+                "filters": ["skip_db_internals"],
+            },
+        },
+        "loggers": {
+            "django.db.backends": {
+                "handlers": ["console"],
+                "level": "DEBUG",
+                "propagate": False,
+            },
+        },
+    }
+
+# django-extensions: shell_plus でデフォルト SQL 出力
+SHELL_PLUS_PRINT_SQL = True
