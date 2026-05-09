@@ -16,6 +16,7 @@ class Question(models.Model):
         return self.question_text
 
     def was_published_recently(self):
+        """公開日時が現在から1日以内の質問に対して True を返す。"""
         now = timezone.now()
         return now - datetime.timedelta(days=1) <= self.pub_date <= now
 

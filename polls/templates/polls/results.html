@@ -1,16 +1,9 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-</head>
-<body>
-    <h1>{{ question.question_text }}</h1>
-    <ul>
-        {% for choice in question.choices.all %}
-            <li>{{ choice.choice_text }}: {{ choice.votes }} votes</li>
-        {% endfor %}
-    </ul>
-</body>
-</html>
+<h1>{{ question.question_text }}</h1>
+
+<ul>
+  {% for choice in question.choices.all %}
+    <li>{{ choice.choice_text }} — {{ choice.votes }} 票</li>
+  {% endfor %}
+</ul>
+
+<a href="{% url 'polls:detail' question.id %}">もう一度投票する</a>

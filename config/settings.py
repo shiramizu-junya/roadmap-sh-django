@@ -11,9 +11,13 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# manage.py test 実行時は SQL ログを抑止するためのフラグ
+TESTING = "test" in sys.argv[:2]
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -142,7 +146,7 @@ STATIC_URL = "static/"
 
 # Local development: SQL query logging
 # https://docs.djangoproject.com/en/6.0/topics/logging/
-if DEBUG:
+if DEBUG and not TESTING:
     # 接続初期化やマイグレーション確認など、アプリ由来でない SQL は除外する
     _DB_INTERNAL_SQL_MARKERS = (
         "information_schema",
