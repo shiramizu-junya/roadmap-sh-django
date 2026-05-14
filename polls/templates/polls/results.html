@@ -1,9 +1,18 @@
-<h1>{{ question.question_text }}</h1>
+{% extends "polls/base.html" %}
 
-<ul>
-  {% for choice in question.choices.all %}
-    <li>{{ choice.choice_text }} — {{ choice.votes }} 票</li>
-  {% endfor %}
-</ul>
+{% block title %}{{ question.question_text }} の結果{% endblock %}
 
-<a href="{% url 'polls:detail' question.id %}">もう一度投票する</a>
+{% block content %}
+    <h2>{{ question.question_text }} の結果</h2>
+
+    <ul>
+        {% for choice in question.choices.all %}
+            <li>{{ choice.choice_text }}: {{ choice.votes }} 票</li>
+        {% endfor %}
+    </ul>
+
+    <p>
+        <a href="{% url 'polls:detail' question.id %}">もう一度投票</a> |
+        <a href="{% url 'polls:index' %}">一覧に戻る</a>
+    </p>
+{% endblock %}

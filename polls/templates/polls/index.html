@@ -1,11 +1,13 @@
-{% if latest_question_list %}
-  <ul>
-    {% for question in latest_question_list %}
-      <li>
-        <a href="{% url 'polls:detail' question.id %}">{{ question.question_text }}</a>
-      </li>
-    {% endfor %}
-  </ul>
-{% else %}
-  <p>まだ質問はありません。</p>
-{% endif %}
+{% extends "polls/base.html" %}
+
+{% block title %}質問一覧{% endblock %}
+
+{% block content %}
+    <ul>
+        {% for question in latest_question_list %}
+            <li><a href="{% url 'polls:detail' question.id %}">{{ question.question_text }}</a></li>
+        {% empty %}
+            <li>まだ質問はありません。</li>
+        {% endfor %}
+    </ul>
+{% endblock %}
