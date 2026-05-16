@@ -5,6 +5,10 @@
 {% block content %}
     <h2>{{ question.question_text }}</h2>
 
+    {% if question.cover_image %}
+        <img src="{{ question.cover_image.url }}" alt="" style="max-width: 100%;">
+    {% endif %}
+
     {% if error_message %}
         <p class="error"><strong>{{ error_message }}</strong></p>
     {% endif %}

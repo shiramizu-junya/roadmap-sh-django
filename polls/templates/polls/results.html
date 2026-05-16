@@ -1,27 +1,29 @@
-{% extends "polls/base.html" %}
+ {% extends "polls/base.html" %}
 
 {% block title %}{{ question.question_text }} の結果{% endblock %}
 
 {% block content %}
     <h2>{{ question.question_text }} の結果</h2>
 
-    <ul>
-        {% for choice in question.choices.all %}
-            <li>{{ choice.choice_text }}: {{ choice.votes }} 票</li>
-        {% endfor %}
-    </ul>
+    {% with total=question.choices.all|length %}
+        <p>{{ question.pub_date|date:"Y-m-d H:i" }} 公開</p>
+
+        {# 合計票数を計算するために choices をループしながら集計 #}
+        {% with choices=question.choices.all %}
+            <ul>
+                {% for choice in choices %}
+                    <li>
+                        <strong>{{ choice.choice_text }}</strong>:
+                        {{ choice.votes }} 票
+                        <div style="background:#0066cc;height:12px;width:{% widthratio choice.votes 50 300 %}px;"></div>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endwith %}
+    {% endwith %}
 
     <p>
         <a href="{% url 'polls:detail' question.id %}">もう一度投票</a> |
         <a href="{% url 'polls:index' %}">一覧に戻る</a>
     </p>
-
-    {% if other_questions %}
-      <h3>他の質問</h3>
-      <ul>
-          {% for question in other_questions %}
-              {% include "polls/_question_item.html" %}
-          {% endfor %}
-      </ul>
-  {% endif %}
 {% endblock %}

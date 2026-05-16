@@ -142,7 +142,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 # Local development: SQL query logging
 # https://docs.djangoproject.com/en/6.0/topics/logging/
@@ -162,8 +165,7 @@ if DEBUG and not TESTING:
             "skip_db_internals": {
                 "()": "django.utils.log.CallbackFilter",
                 "callback": lambda record: not any(
-                    marker in record.getMessage()
-                    for marker in _DB_INTERNAL_SQL_MARKERS
+                    marker in record.getMessage() for marker in _DB_INTERNAL_SQL_MARKERS
                 ),
             },
         },

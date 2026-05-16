@@ -1,5 +1,8 @@
 {# 1件分の質問を表示する部品テンプレート。{% include %} 専用 #}
 <li>
-    <a href="{% url 'polls:detail' question.id %}">{{ question.question_text }}</a>
+     {% if question.cover_image %}
+         <img src="{{ question.cover_image.url }}" alt="カバー画像" style="height: 2em; vertical-align: middle;">
+     {% endif %}
+   <a href="{% url 'polls:detail' question.id %}">{{ question.question_text }}</a>
     <small>（{{ question.pub_date|date:"Y-m-d" }} 公開）</small>
 </li>

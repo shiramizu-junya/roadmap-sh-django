@@ -22,6 +22,7 @@ class QuestionAdmin(admin.ModelAdmin):
                 "classes": ["collapse"],
             },
         ),
+        ("画像", {"fields": ["cover_image"]}),
     ]
     inlines = [ChoiceInline]
 

@@ -6,6 +6,11 @@ from django.utils import timezone
 class Question(models.Model):
     question_text = models.CharField("質問文", max_length=200)
     pub_date = models.DateTimeField("公開日時")
+    cover_image = models.ImageField(
+        upload_to="polls/covers/",
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         ordering = ["-pub_date"]
