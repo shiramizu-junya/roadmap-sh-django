@@ -1,4 +1,4 @@
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseNotFound, HttpResponseRedirect, JsonResponse
 from django.urls import reverse
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
@@ -30,7 +30,11 @@ def results(request, question_id):
     """投票結果。"""
     question = get_object_or_404(Question, pk=question_id)
     other_questions = Question.objects.exclude(pk=question_id).order_by("-pub_date")[:3]
-    return render(request, "polls/results.html", {"question": question, "other_questions": other_questions})
+    return render(
+        request,
+        "polls/results.html",
+        {"question": question, "other_questions": other_questions},
+    )
 
 
 def vote(request, question_id):
@@ -50,3 +54,42 @@ def vote(request, question_id):
     selected_choice.votes += 1
     selected_choice.save()
     return HttpResponseRedirect(reverse("polls:results", args=(question.id,)))
+
+
+def whoami(request):
+    """リクエスト内容を JSON で返すデバッグ用ビュー。"""
+    return JsonResponse(
+        {
+            "method": request.method,
+            "path": request.path,
+            "full_path": request.get_full_path(),
+            "host": request.get_host(),
+            "is_secure": request.is_secure(),
+            "user_agent": request.headers.get("User-Agent", ""),
+            "remote_addr": request.META.get("REMOTE_ADDR", ""),
+            "query_params": dict(request.GET),
+            "cookies": dict(request.COOKIES),
+            "user_authenticated": request.user.is_authenticated,
+            "session_key": request.session.session_key,
+        }
+    )
+
+
+def response_demo(request):
+    """?type=json / ?type=redirect / ?type=404 で挙動が変わる。"""
+    response_type = request.GET.get("type", "html")
+
+    if response_type == "json":
+        return JsonResponse({"hello": "world", "items": [1, 2, 3]})
+
+    if response_type == "redirect":
+        return HttpResponseRedirect("/polls/")
+
+    if response_type == "404":
+        return HttpResponseNotFound("見つかりません")
+
+    # デフォルト: HTML
+    response = HttpResponse("<h1>Hello</h1>")
+    response["X-Demo-Header"] = "yes"
+    response.set_cookie("demo", "on", max_age=60)
+    return response
