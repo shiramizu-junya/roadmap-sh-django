@@ -1,0 +1,5 @@
+{# 1件分の質問を表示する部品テンプレート。{% include %} 専用 #}
+<li>
+    <a href="{% url 'polls:detail' question.id %}">{{ question.question_text }}</a>
+    <small>（{{ question.pub_date|date:"Y-m-d" }} 公開）</small>
+</li>

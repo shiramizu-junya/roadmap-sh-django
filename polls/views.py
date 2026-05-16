@@ -2,7 +2,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
-from .models import Question,  Choice
+from .models import Question, Choice
 
 
 def index(request):
@@ -29,7 +29,8 @@ def detail(request, question_id):
 def results(request, question_id):
     """投票結果。"""
     question = get_object_or_404(Question, pk=question_id)
-    return render(request, "polls/results.html", {"question": question})
+    other_questions = Question.objects.exclude(pk=question_id).order_by("-pub_date")[:3]
+    return render(request, "polls/results.html", {"question": question, "other_questions": other_questions})
 
 
 def vote(request, question_id):
@@ -37,7 +38,7 @@ def vote(request, question_id):
     question = get_object_or_404(Question, pk=question_id)
     try:
         selected_choice = question.choices.get(pk=request.POST["choice"])
-    except (KeyError, Choice.DoesNotExist):
+    except KeyError, Choice.DoesNotExist:
         return render(
             request,
             "polls/detail.html",

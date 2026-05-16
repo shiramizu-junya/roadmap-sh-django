@@ -15,4 +15,13 @@
         <a href="{% url 'polls:detail' question.id %}">もう一度投票</a> |
         <a href="{% url 'polls:index' %}">一覧に戻る</a>
     </p>
+
+    {% if other_questions %}
+      <h3>他の質問</h3>
+      <ul>
+          {% for question in other_questions %}
+              {% include "polls/_question_item.html" %}
+          {% endfor %}
+      </ul>
+  {% endif %}
 {% endblock %}
