@@ -71,8 +71,8 @@ mysqlclient = { PKG_CONFIG_PATH = "/opt/homebrew/opt/mysql-client/lib/pkgconfig"
 # 本体: Django 5.2 系 / Django Ninja / MySQL ドライバ（mysqlclient。ここでビルドが走る）
 uv add "django>=5.2,<6.0" django-ninja mysqlclient
 
-# 開発用: リンタ兼フォーマッタ / 型チェッカ / Django 用の型情報
-uv add --dev ruff mypy "django-stubs[compatible-mypy]>=5.2,<6.0"
+# 開発用: リンタ兼フォーマッタ / Django 用の型情報（[compatible-mypy] で、相性のよい mypy も一緒に入る）
+uv add --dev ruff "django-stubs[compatible-mypy]>=5.2,<6.0"
 
 # Django プロジェクトを作る（設定置き場は config/。末尾の . で「ここに作る」）
 uv run django-admin startproject config .
@@ -135,6 +135,14 @@ uv run mypy .               # 型チェック
 ```
 
 ✅ 検証済み: ruff 0.16.10 / mypy 1.19.1 / django-stubs 5.2.9
+
+> 💡補足: mypy は自分で指定しません。django-stubs の `[compatible-mypy]` が、対応する範囲（5.2.9 なら `mypy>=1.13,<1.20`）の mypy を選んで入れます。
+> mypy を単独で入れると最新の 2.x が入り、django-stubs 5.2 が対応していない組み合わせになります。
+> 根拠: https://github.com/typeddjango/django-stubs#installation
+
+> ⚠️ **注意**: django-stubs 5.2.9 の対応表に載っている Python は 3.10〜3.13 で、3.14 はまだ載っていません。
+> 手元の検証では 3.14 でも mypy は通りました。もし型チェックで不自然なエラーが出たら、`[tool.mypy]` の `python_version` を `"3.13"` に下げて試してください。
+> 根拠: https://github.com/typeddjango/django-stubs#version-compatibility
 
 この時点の mypy は `ALLOWED_HOSTS` で1件エラーになります。**それで正常です。** ステップ1-1 で `settings.py` を直すと消えます。
 
