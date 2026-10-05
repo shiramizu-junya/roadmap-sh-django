@@ -62,7 +62,7 @@ REST API で作る。SSR（テンプレート・フォーム・クラスベー�
 【題材】          : ブログ（第2部まで）→ EC 風に拡張（第3部）。決済は作らない
 【実行環境】      : アプリはローカル（Python 3.14 / uv）/ DB は Docker（MySQL 8.x）
 【主要ライブラリ】: Django 5.x / django-ninja / django-ninja-jwt
-                    Pillow（画像）/ mysqlclient または PyMySQL
+                    Pillow（画像）/ mysqlclient（Django 推奨のドライバ）
                     pytest + pytest-django
 【開発ツール】    : uv / ruff / mypy + django-stubs
                     pre-commit は**第2部から**（第1部では入れない）

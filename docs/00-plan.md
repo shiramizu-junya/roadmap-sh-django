@@ -35,18 +35,44 @@ Django + Django Ninja で REST API を作る教材の、全体の地図です。
 > 🧒 **かみくだくと**: uv は「Python 本体とライブラリをまとめて管理する道具」。
 > npm と nvm を1つにしたものに近い。ライブラリは `.venv/`（このリポジトリ専用の箱）に入る。
 
+MySQL ドライバは、Django が推奨する **mysqlclient** を使います。
+mysqlclient は C 言語の部品を含みます。macOS 向けのビルド済みパッケージが無いため、インストール時に手元でビルドします。
+そのための部品を先に Homebrew で入れます（Mac 全体に入る。最初の1回だけ）。
+
+```bash
+# ビルドに使う道具（pkg-config）と、MySQL のクライアントライブラリ
+brew install pkg-config mysql-client
+```
+
+✅ 検証済み: Homebrew / mysql-client 26.7.0 / pkgconf 3.0.7
+
+続いて、Python 側の準備です。
+
 ```bash
 # pyproject.toml を作る（--bare: サンプルの main.py などを作らない）
 uv init --bare --python 3.14
 
 # このリポジトリで使う Python を 3.14 に固定する（.python-version ができる）
 uv python pin 3.14
+```
 
-# 本体: Django 5.2 系 / Django Ninja / MySQL ドライバ（PyMySQL）
-uv add "django>=5.2,<6.0" django-ninja pymysql
+✅ 検証済み: uv 0.12.21 / Python 3.14.3
 
-# 開発用: リンタ兼フォーマッタ / 型チェッカ / Django 用の型情報 / PyMySQL の型情報
-uv add --dev ruff mypy "django-stubs[compatible-mypy]>=5.2,<6.0" types-PyMySQL
+`pyproject.toml` の末尾に追記します（差分）。mysqlclient をビルドするとき、MySQL のライブラリの場所を uv に教える設定です。
+
+```toml
+[tool.uv.extra-build-variables]
+mysqlclient = { PKG_CONFIG_PATH = "/opt/homebrew/opt/mysql-client/lib/pkgconfig" }
+```
+
+✅ 検証済み: この設定が無いと `uv add mysqlclient` は `pkg-config --exists mysqlclient` で失敗する。あると成功する
+
+```bash
+# 本体: Django 5.2 系 / Django Ninja / MySQL ドライバ（mysqlclient。ここでビルドが走る）
+uv add "django>=5.2,<6.0" django-ninja mysqlclient
+
+# 開発用: リンタ兼フォーマッタ / 型チェッカ / Django 用の型情報
+uv add --dev ruff mypy "django-stubs[compatible-mypy]>=5.2,<6.0"
 
 # Django プロジェクトを作る（設定置き場は config/。末尾の . で「ここに作る」）
 uv run django-admin startproject config .
@@ -56,14 +82,20 @@ uv run python manage.py startapp accounts
 uv run python manage.py startapp blog
 ```
 
-✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / PyMySQL 1.2.3 / uv 0.12（2026-10-06）
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / mysqlclient 2.3.0 / MySQL 8.4.11 への接続と `migrate` まで（2026-10-06）
 
 **ここで `migrate` は実行しないでください。** ステップ1-2 でユーザーモデルを差し替えてから、ステップ1-3 で初めて実行します（理由は 1-2 で扱います）。
 
-> 💡補足: MySQL ドライバは **PyMySQL** を使います。
-> もう1つの候補 mysqlclient は C 言語の部品をビルドするため、macOS では `pkg-config` と MySQL クライアントの事前インストールが必要です。
-> 実際にこの環境では `pkg-config` が無くビルドに失敗しました。PyMySQL は Python だけで書かれているので、この手間がありません。
+> 💡補足: Django の公式ドキュメントが挙げる MySQL ドライバは、mysqlclient と MySQL Connector/Python の2つです。
+> mysqlclient が「推奨」とされ、Django 本体にこれ専用のつなぎ込み（アダプタ）が入っています。
 > 根拠: https://docs.djangoproject.com/en/5.2/ref/databases/#mysql-db-api-drivers
+
+> 💡補足: なぜ uv だけで入らないのか。PyPI の mysqlclient 2.3.0 は、ビルド済みのパッケージ（wheel）が Windows 向けしかありません。
+> macOS ではソースからビルドするため、C 言語のライブラリが要ります。uv が入れられるのは Python のパッケージだけなので、ライブラリは Homebrew で入れます。
+> 根拠: https://pypi.org/project/mysqlclient/#files ／ https://github.com/PyMySQL/mysqlclient#macos-homebrew
+
+> 💡補足: `/opt/homebrew` は Apple Silicon の Mac での Homebrew の場所です。Intel の Mac では `/usr/local` に読み替えます。
+> `brew --prefix` を実行すると、自分の Mac での場所が分かります。
 
 > 💡補足: Django は 5.2 系を使います。5.2 は LTS（長期サポート版）で、2028年4月までセキュリティ修正が出ます。
 > 最新は 6.x ですが、教材の前提（5.x）に合わせます。
