@@ -37,10 +37,10 @@ Django + Django Ninja で REST API を作る教材の、全体の地図です。
 
 ```bash
 # pyproject.toml を作る（--bare: サンプルの main.py などを作らない）
-uv init --bare --python 3.12
+uv init --bare --python 3.14
 
-# このリポジトリで使う Python を 3.12 に固定する（.python-version ができる）
-uv python pin 3.12
+# このリポジトリで使う Python を 3.14 に固定する（.python-version ができる）
+uv python pin 3.14
 
 # 本体: Django 5.2 系 / Django Ninja / MySQL ドライバ（PyMySQL）
 uv add "django>=5.2,<6.0" django-ninja pymysql
@@ -56,7 +56,7 @@ uv run python manage.py startapp accounts
 uv run python manage.py startapp blog
 ```
 
-✅ 検証済み: Python 3.12 / Django 5.2.17 / django-ninja 1.7.1 / PyMySQL 1.2.3 / uv 0.12（2026-10-06）
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / PyMySQL 1.2.3 / uv 0.12（2026-10-06）
 
 **ここで `migrate` は実行しないでください。** ステップ1-2 でユーザーモデルを差し替えてから、ステップ1-3 で初めて実行します（理由は 1-2 で扱います）。
 
@@ -69,6 +69,11 @@ uv run python manage.py startapp blog
 > 最新は 6.x ですが、教材の前提（5.x）に合わせます。
 > 根拠: https://www.djangoproject.com/download/#supported-versions
 
+> 💡補足: Python は最新の安定版 **3.14** を使います（3.15 は 2026-10-06 時点でまだリリース候補版）。
+> Django 5.2 は 5.2.8 から Python 3.14 に対応しています。
+> 根拠: https://docs.djangoproject.com/en/5.2/faq/install/#what-python-version-can-i-use-with-django
+> 手元の 3.14 を最新のパッチ版（3.14.7 など）に上げるには `uv python upgrade 3.14` を使います。
+
 ### 2.2 ruff と mypy の最小設定
 
 `pyproject.toml` の末尾に追記します（差分）。
@@ -76,14 +81,14 @@ uv run python manage.py startapp blog
 ```toml
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 extend-exclude = ["**/migrations/*"]   # 自動生成ファイルは対象外
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "DJ"]    # 基本 + import 順 + バグの芽 + Django 向け
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 plugins = ["mypy_django_plugin.main"]  # Django のモデルを型として理解させる
 exclude = ["/migrations/"]
 

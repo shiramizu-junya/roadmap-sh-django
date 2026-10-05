@@ -60,7 +60,7 @@ REST API で作る。SSR（テンプレート・フォーム・クラスベー�
 【Python の経験】 : 無し
 【Django の経験】 : ほぼ無し
 【題材】          : ブログ（第2部まで）→ EC 風に拡張（第3部）。決済は作らない
-【実行環境】      : アプリはローカル（Python 3.12 / uv）/ DB は Docker（MySQL 8.x）
+【実行環境】      : アプリはローカル（Python 3.14 / uv）/ DB は Docker（MySQL 8.x）
 【主要ライブラリ】: Django 5.x / django-ninja / django-ninja-jwt
                     Pillow（画像）/ mysqlclient または PyMySQL
                     pytest + pytest-django
@@ -299,7 +299,7 @@ Django / Ninja の記法・API・挙動が初出のとき、次の4点を必ず�
 
 コードブロックの直後に検証状態を1行で書く。
 
-- `✅ 検証済み: Python 3.12 / Django 5.x / MySQL 8.x`
+- `✅ 検証済み: Python 3.14 / Django 5.x / MySQL 8.x`
 - `⚠️ 未実行` — **読者が検証するコマンドを必ず併記する**
 
 検証は「起動した」で終わらせない。`curl` の実レスポンス、`python manage.py showmigrations` の出力、`SHOW COLUMNS` の結果、`pytest` の結果まで示す。
@@ -389,7 +389,7 @@ Django / Ninja の記法・API・挙動が初出のとき、次の4点を必ず�
 
 1. **各部の到達点** — その部を終えたとき何ができるか。**「ここで止めても成果物になる」ことを第1部について明記する**
 2. **環境準備** — 各コマンドの役割を1行ずつ
-   - uv の導入、`uv init`、Python 3.12 の固定
+   - uv の導入、`uv init`、Python 3.14 の固定
    - Django と django-ninja の追加、`startproject` / `startapp`
    - ruff / mypy + django-stubs の初期設定（最小構成）
    - Docker Compose で MySQL（Docker 学習リポジトリの構成を流用してよい）
@@ -442,7 +442,7 @@ Django / Ninja の記法・API・挙動が初出のとき、次の4点を必ず�
 ### M-1. 実践
 ✋ コピペで構いません。ただし打ち終わったら1行だけ変えて動かしてください。
 （ファイルパスを明示。全文か差分かを明示）
-✅ 検証済み: Python 3.12 / Django 5.x / MySQL 8.x
+✅ 検証済み: Python 3.14 / Django 5.x / MySQL 8.x
   ／ または ⚠️ 未実行（検証手順: `...`）
 
 ### M-2. 🔬 仕組み解剖
