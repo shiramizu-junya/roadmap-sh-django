@@ -12,3 +12,6 @@
 | 設定モジュール | settings module（`settings.py`） | Django 全体の振る舞いを決めるファイル。起動時に1回読まれる | 第1部-1 |
 | URLconf | URLconf（`urls.py`） | 受付の案内表。リクエストのたびに `urlpatterns` を上から照合する | 第1部-1 |
 | 開発サーバ | development server（`runserver`） | 開発用の簡易サーバ。ファイルを保存すると自動で再起動する | 第1部-1 |
+| モデル | model | 台帳（テーブル）の設計図を Python のクラスで書いたもの | 第1部-2 |
+| カスタムユーザーモデル | custom user model | 標準のユーザーの代わりに使う、自分のユーザーの設計図。最初の `migrate` の前に作る | 第1部-2 |
+| 抽象モデル | abstract model（例: `AbstractUser`） | 項目を受け継がせるためだけのモデル。自分のテーブルは持たない | 第1部-2 |

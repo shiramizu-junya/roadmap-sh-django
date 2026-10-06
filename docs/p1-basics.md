@@ -160,3 +160,155 @@ curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://127.0.0.1:8000/a
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ2` — カスタムユーザーモデル
+
+---
+
+## 第1部-2: カスタムユーザーモデル
+
+**❓ この回の問い**: DB の接続先は決まった。最初の `migrate` の前に、済ませておくべきことは何か？
+
+**作るもの**: 自分の `User` モデルを定義し、Django に「これを使え」と伝える
+**重要度**: 🟡 読めればよい — 書くのは最初の1回。ただし忘れると戻せない
+**前ステップとの接続**: 1-1 の `settings.py` に、アプリの登録と1行の指名を足す
+
+### 2-0. このステップの初出
+
+**Django / Ninja**: `AbstractUser`, `AUTH_USER_MODEL` / **Python**: クラスの継承, `pass`
+
+> 🧒 **かみくだくと**: **モデル**は台帳（テーブル）の設計図。1-3 で詳しく扱う。
+
+### 2-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`accounts/models.py`（全文）
+
+```python
+from django.contrib.auth.models import AbstractUser
+
+
+class User(AbstractUser):
+    # 今は AbstractUser の項目をそのまま使う。項目を足すときはここに書く
+    pass
+```
+
+`config/settings.py`（差分。2か所）
+
+```python
+INSTALLED_APPS = [
+    # （既存の django.contrib.* はそのまま）
+    "accounts",  # 追加: accounts アプリを登録する
+]
+
+# 末尾に追加: 標準の auth.User の代わりに、accounts アプリの User を使う
+AUTH_USER_MODEL = "accounts.User"
+```
+
+```bash
+uv run python manage.py check
+uv run python manage.py shell -c "from django.contrib.auth import get_user_model; print(get_user_model())"
+```
+
+```text
+System check identified no issues (0 silenced).
+6 objects imported automatically (use -v 2 for details).
+
+<class 'accounts.models.User'>
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（ruff・mypy も通過）
+
+`get_user_model()` は「今使っているユーザーモデル」を返す関数です。**`migrate` はまだしません。**
+
+### 2-2. 🔬 仕組み解剖
+
+| | `AbstractUser` | `AUTH_USER_MODEL` |
+| --- | --- | --- |
+| 正式名称 | 抽象モデル `AbstractUser` | 設定 `AUTH_USER_MODEL` |
+| いつ・誰が | 起動時に `username` などの項目を `User` に渡す。自分のテーブルは持たない | 起動時に読まれ、ユーザーの参照先を決める |
+| TS での対応物 | `class User extends AbstractUser {}`（テーブル生成は対応物なし） | 対応物なし。DB の構造まで決める仕組みが無い |
+| なぜこの設計 | 標準ユーザーの機能を丸ごと使える | 使う側が具体的なクラスに依存しない |
+| 失敗すると | — | アプリ未登録なら `ImproperlyConfigured` |
+
+```text
+○ この教材の順番
+  1-2  User を定義し、AUTH_USER_MODEL で指名
+  1-3  初めての migrate → accounts_user ができ、ほかのテーブルがそれを参照する
+
+✕ 逆の順番（試さないでください）
+  ①  先に migrate            → auth_user ができ、admin などが auth_user を参照する
+  ②  あとで User を差し替え  → migrate が InconsistentMigrationHistory で止まる
+```
+
+✅ 検証済み: ✕ の②は、別の DB で実際に起こしたエラー（全文は 2-6）
+
+**なぜ最初でないと駄目か**: ほかのテーブルがユーザーを参照する先は、**最初の `migrate` で固定される**からです。
+
+### 2-3. 🐍 Python注
+
+> 🐍 `class User(AbstractUser):` は継承。TS の `class User extends AbstractUser` と同じ。
+> 🐍 `pass` は「中身なし」を表す文。
+
+### 2-4. 解説 — なぜこう設計するか
+
+中身は標準と同じでも、差し替えておけば**あとから項目を足せます**。
+
+🧠 Django の考え方: 変えられない決定は最初に済ませる。
+
+### 2-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 新規プロジェクトでは、標準で足りてもカスタムユーザーモデルを作ることが公式に強く勧められている。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/#using-a-custom-user-model-when-starting-a-project
+
+### 2-6. 🔮 予測 → 動作確認
+
+1. `INSTALLED_APPS` から `"accounts"` を消して `check` すると？（試したら戻す）
+2. 先に `migrate` してから差し替えていたら？（**試さない**）
+
+```bash
+uv run python manage.py check
+```
+
+```text
+django.core.exceptions.ImproperlyConfigured: AUTH_USER_MODEL refers to model 'accounts.User' that has not been installed
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（`"accounts"` を消した状態）
+
+<details><summary>答え</summary>
+
+1. 上の `ImproperlyConfigured`。指名先のアプリが登録されていない
+2. 別の DB で実際に起こした結果:
+
+```text
+django.db.migrations.exceptions.InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial on database 'default'.
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+直すには DB の作り直しが要ります。
+
+</details>
+
+### 2-7. ✅ 想起チェック
+
+1. `AUTH_USER_MODEL` を最初の `migrate` より前に書くのはなぜ？
+
+<details><summary>答え</summary>
+
+1. 最初の `migrate` で、ほかのテーブルの参照先が固定されるから
+
+</details>
+
+### 2-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **ユーザーモデルは、最初の `migrate` の前に差し替える。**
+
+📒 用語集に追記: モデル / カスタムユーザーモデル / 抽象モデル
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ3` — モデルを書く → マイグレーション
