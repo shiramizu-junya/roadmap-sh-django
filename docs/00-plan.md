@@ -82,6 +82,9 @@ uv run python manage.py startapp accounts
 uv run python manage.py startapp blog
 ```
 
+> 🧒 **かみくだくと**: **プロジェクト**（`config/`）はサイト全体の設定を持つ入れ物。
+> **アプリ**（`accounts/`・`blog/`）は機能ごとに分けた部品で、プロジェクトに登録して使う。
+
 ✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / mysqlclient 2.3.0 / MySQL 8.4.11 への接続と `migrate` まで（2026-10-06）
 
 **ここで `migrate` は実行しないでください。** ステップ1-2 でユーザーモデルを差し替えてから、ステップ1-3 で初めて実行します（理由は 1-2 で扱います）。
@@ -186,10 +189,72 @@ docker compose exec db mysql -udjango -pdjango blog -e "SELECT VERSION();"   # 8
 > 両方を同時に起動できます。
 
 > 🔓 **教材用の簡略化**: パスワードを `compose.yaml` に直接書いている。
-> **本番では**: 環境変数やシークレット管理から渡す。第2部ステップ1で `.env` に移す（`SECRET_KEY` だけは先にステップ1-1 で移す）。
+> **本番では**: 環境変数やシークレット管理から渡す。第2部ステップ1で `.env` に移す（`SECRET_KEY` だけは §2.4 で先に移す）。
 > 根拠: https://hub.docker.com/_/mysql （"Docker Secrets" の節）
 
 Django から MySQL への接続設定（`settings.py` の `DATABASES`）は、ステップ1-1 で書きます。
+
+### 2.4 秘密鍵を作り直して `.env` に移す
+
+`startproject` は `settings.py` に `SECRET_KEY`（秘密鍵）を直接書き込みます。
+このリポジトリは GitHub で公開しているので、その鍵はもう誰でも読めます。そこで鍵を作り直し、Git に入らない `.env` に置きます。
+`settings.py` の役割そのものは、ステップ1-1 で扱います。
+
+> 🧒 **かみくだくと**: `SECRET_KEY` は、ログイン状態などに「改ざんされていない印」を付けるための鍵。
+> **環境変数**は「プログラムの外から渡す設定値」。`.env` はそれを書いておくファイルで、Git には入れない。
+
+```bash
+# .env を読み込むライブラリ
+uv add python-dotenv
+
+# Django の関数で新しい鍵を作り、.env に書き込む（記号を含むので、シングルクォートで囲む）
+echo "DJANGO_SECRET_KEY='$(uv run python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')'" > .env
+
+# .env が Git の対象外であることを確かめる
+git check-ignore -v .env
+```
+
+✅ 検証済み: python-dotenv 1.2.4（最後の出力: `.gitignore:2:.env	.env`）
+
+`config/settings.py`（差分。先頭の import と `SECRET_KEY` の行）
+
+```python
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# .env の中身を環境変数として読み込む（同じ名前の環境変数がすでにあれば、そちらを優先）
+load_dotenv(BASE_DIR / ".env")
+
+# 秘密鍵は .env から読む。無ければ KeyError で起動を止める
+SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
+```
+
+```bash
+uv run python manage.py shell -c "from django.conf import settings; print(len(settings.SECRET_KEY), settings.SECRET_KEY.startswith('django-insecure'))"
+```
+
+```text
+6 objects imported automatically (use -v 2 for details).
+
+50 False
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（`.env` を消すと `KeyError: 'DJANGO_SECRET_KEY'` で止まることも確認）
+
+1行目は `shell` が毎回出すお知らせなので、気にしなくて大丈夫です（数字は環境によって変わります）。
+50文字の新しい鍵が読み込まれ、`django-insecure-` で始まる古い鍵ではなくなっていれば成功です。
+古い鍵は Git の履歴に残りますが、もうどこでも使われていない文字列なので害はありません。
+
+> 💡補足: `.env` の読み込みに uv の `--env-file` を使う方法もあります。
+> ただしその方法だと、`manage.py`・mypy・pytest・VSCode のデバッガのすべてで毎回指定が要ります。
+> python-dotenv なら `settings.py` 自身が読むので、どこから起動しても同じように動きます。
+
+> 🏢 **実務メモ**: `SECRET_KEY` はコードに書かず、環境変数などから読む。漏れたら作り直す。
+> 根拠: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/#secret-key
 
 ---
 
@@ -237,7 +302,7 @@ roadmap-sh-django/
 
 | # | タイトル | 作るもの | 初出（Django/Ninja） | 重要度 |
 | --- | --- | --- | --- | --- |
-| 1-1 | プロジェクトを動かす | MySQL につながった状態で `runserver` が起動する。`SECRET_KEY` を `.env` に移し、鍵を作り直す | `settings.py`, `urls.py` | 🔴 |
+| 1-1 | プロジェクトを動かす | MySQL につながった状態で `runserver` が起動する | `settings.py`, `urls.py` | 🔴 |
 | 1-2 | カスタムユーザーモデル | `accounts.User` を定義し、Django に「これを使え」と伝える | `AbstractUser`, `AUTH_USER_MODEL` | 🔴 |
 | 1-3 | モデルを書く → マイグレーション | `Post` が MySQL のテーブルになる（`SHOW COLUMNS` で確認） | `models.Model` とフィールド, マイグレーション | 🔴 |
 | 1-4 | 管理画面でデータを入れて見る | 管理画面から Post を3件登録できる | `admin.site.register`, 管理画面 | 🟡 |
@@ -250,8 +315,7 @@ roadmap-sh-django/
 | 1-11 | 削除 | `DELETE /api/posts/{id}` が 204 を返す | `delete()`, ステータスコードの指定 | 🔴 |
 | 1-12 | テストで固定する | CRUD の pytest が通る（テスト用 DB の権限もここで設定） | `pytest.mark.django_db`, Ninja `TestClient` | 🔴 |
 
-`SECRET_KEY` だけは 1-1 で `.env` に移します。このリポジトリは GitHub で公開しており、`startproject` が作った鍵がすでに履歴に残っているためです。
-鍵を作り直せば、履歴に残った古い鍵はどこでも使われない文字列になります。`.env` を読み込む方法（uv の `--env-file` か、ライブラリを1つ足すか）は、1-1 を書くときに両方試して決めます。
+`SECRET_KEY` だけは環境準備（§2.4）で先に `.env` に移します。公開リポジトリの履歴に、`startproject` が作った鍵が残っているためです。
 
 山場は **1-6 → 1-7** です。手書きで苦労した部分が、Ninja でどこに消えたかを並べて見ます。
 1-1〜1-12 では認証も pre-commit も入れません。全エンドポイント公開で進めます。
