@@ -312,3 +312,178 @@ django.db.migrations.exceptions.InconsistentMigrationHistory: Migration admin.00
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ3` — モデルを書く → マイグレーション
+
+---
+
+## 第1部-3: モデルを書く → マイグレーション
+
+**❓ この回の問い**: 設計図（モデル）は、どうやって MySQL のテーブルになるのか？
+
+**作るもの**: `Post`（記事）のモデルから `blog_post` テーブルを作る
+**重要度**: 🔴 毎日使う — モデルを変えるたびに通る
+**前ステップとの接続**: 1-2 で止めていた `migrate` を初めて実行する
+
+### 3-0. このステップの初出
+
+**Django / Ninja**: `models.Model` とフィールド, マイグレーション（`makemigrations` / `migrate`） / **Python**: キーワード引数, `def`・`self`・`-> str`
+
+> 🧒 **かみくだくと**: **フィールド**は台帳の1列。**マイグレーション**は台帳を書き換える手続きで、SQL は Django が作る。
+
+### 3-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`blog/models.py`（全文）
+
+```python
+from django.db import models
+
+
+class Post(models.Model):
+    title = models.CharField(max_length=200)  # 短い文字列（上限200文字）
+    body = models.TextField()  # 長い文章（上限なし）
+    created_at = models.DateTimeField(auto_now_add=True)  # 作成時に自動で入る
+    updated_at = models.DateTimeField(auto_now=True)  # 保存のたびに自動で更新
+
+    def __str__(self) -> str:
+        return self.title
+```
+
+`config/settings.py`（差分）: `INSTALLED_APPS` に `"blog",` を足す。
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+```bash
+uv run python manage.py makemigrations       # 設計図の差分から、手続き書を作る
+uv run python manage.py sqlmigrate blog 0001 # その手続き書が出す SQL を見る（実行はしない）
+uv run python manage.py migrate              # 手続き書を DB に流す
+```
+
+```text
+Migrations for 'blog':
+  blog/migrations/0001_initial.py
+    + Create model Post
+Migrations for 'accounts':
+  accounts/migrations/0001_initial.py
+    + Create model User
+```
+
+```sql
+CREATE TABLE `blog_post` (`id` bigint AUTO_INCREMENT NOT NULL PRIMARY KEY, `title` varchar(200) NOT NULL, `body` longtext NOT NULL, `created_at` datetime(6) NOT NULL, `updated_at` datetime(6) NOT NULL);
+```
+
+```text
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying accounts.0001_initial... OK
+  Applying admin.0001_initial... OK
+  （中略）
+  Applying blog.0001_initial... OK
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+```bash
+docker compose exec db mysql -udjango -pdjango blog -e "SHOW COLUMNS FROM blog_post; SHOW TABLES LIKE '%user';"
+```
+
+```text
+Field       Type          Null  Key  Default  Extra
+id          bigint        NO    PRI  NULL     auto_increment
+title       varchar(200)  NO         NULL
+body        longtext      NO         NULL
+created_at  datetime(6)   NO         NULL
+updated_at  datetime(6)   NO         NULL
+Tables_in_blog (%user)
+accounts_user
+```
+
+✅ 検証済み: MySQL 8.4.11（出力は列を揃えて表示）
+
+> ✅ **回収**: 1-1 の未適用の警告はこれで消える。1-2 の通り、`accounts` は `admin` より先に適用され、`accounts_user` ができた。
+
+> ⏭️ **後で回収**: `__str__`（1件を文字で表す方法）は 1-4 で効果を見る。
+
+### 3-2. 🔬 仕組み解剖
+
+| | `models.Model` とフィールド | マイグレーション |
+| --- | --- | --- |
+| 正式名称 | モデルとフィールド | `makemigrations` と `migrate` |
+| いつ・誰が | 起動時に読まれる。DB には触らない | 前者はファイルを比べるだけ。後者は `django_migrations` を見て未実行分を流す |
+| TS での対応物 | 対応物なし。TS の型は実行時に消える | 対応物なし（言語ではなく ORM の機能） |
+| なぜこの設計 | 設計図を1か所に置き、SQL は DB ごとに作る | 変更を Git に残し、誰の DB でも再現できる |
+| 失敗すると | `max_length` 忘れは `fields.E120` | 未実行ならテーブルが無い |
+
+```text
+blog/models.py（設計図）
+   │  makemigrations … 前回の手続き書との差分を探す
+   ▼
+blog/migrations/0001_initial.py（台帳を書き換える手続き書）
+   │  migrate … まだ実行していない手続き書だけを、順に流す
+   ▼
+MySQL: CREATE TABLE blog_post …  ＋  django_migrations に「実行済み」を記録
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+見てほしいのは、**DB に触るのは `migrate` だけ**という点。
+
+### 3-3. 🐍 Python注
+
+> 🐍 `max_length=200` はキーワード引数（名前付きで値を渡す）。
+> 🐍 `def __str__(self) -> str:` はメソッド。`self` は TS の `this`、`-> str` は戻り値の型。
+
+### 3-4. 解説 — なぜこう設計するか
+
+`id` 列は Django が自動で足します。書くのは記録したい項目だけです。
+
+🧠 Django の考え方: 正しいのは設計図。DB はそれに合わせて作られる。
+
+### 3-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: `migrations/` のファイルは Git にコミットする。全員の DB を同じ形にするため。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/migrations/
+
+### 3-6. 🔮 予測 → 動作確認
+
+1. `makemigrations` をもう一度実行すると、何が出る？
+2. `created_at` の `Default` は `NULL`。作成時刻は誰が入れる？
+
+```bash
+uv run python manage.py makemigrations
+```
+
+```text
+No changes detected
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17
+
+<details><summary>答え</summary>
+
+1. `No changes detected`
+2. Django。`INSERT` 文に時刻を書き込む（1-6 で見る）
+
+</details>
+
+### 3-7. ✅ 想起チェック
+
+1. `makemigrations` と `migrate`、DB に触るのはどっち？
+
+<details><summary>答え</summary>
+
+1. `migrate`
+
+</details>
+
+### 3-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`makemigrations` は手続き書を作り、`migrate` が DB に流す。**
+
+📒 用語集に追記: フィールド / マイグレーション / マイグレーションファイル
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ4` — 管理画面でデータを入れて見る

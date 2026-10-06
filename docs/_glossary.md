@@ -15,3 +15,6 @@
 | モデル | model | 台帳（テーブル）の設計図を Python のクラスで書いたもの | 第1部-2 |
 | カスタムユーザーモデル | custom user model | 標準のユーザーの代わりに使う、自分のユーザーの設計図。最初の `migrate` の前に作る | 第1部-2 |
 | 抽象モデル | abstract model（例: `AbstractUser`） | 項目を受け継がせるためだけのモデル。自分のテーブルは持たない | 第1部-2 |
+| フィールド | field（`CharField` など） | 台帳の1列。種類ごとにクラスがある | 第1部-3 |
+| マイグレーション | migration | 台帳を書き換える手続き。SQL は Django が作る。`makemigrations` で手続き書を作り、`migrate` で DB に流す | 第1部-3 |
+| マイグレーションファイル | migration file | `migrations/0001_initial.py` など。手続き書。Git にコミットする | 第1部-3 |
