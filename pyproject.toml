@@ -9,3 +9,25 @@ dependencies = [
 ]
 [tool.uv.extra-build-variables]
 mysqlclient = { PKG_CONFIG_PATH = "/opt/homebrew/opt/mysql-client/lib/pkgconfig" }
+
+[dependency-groups]
+dev = [
+    "django-stubs[compatible-mypy]>=5.2,<6.0",
+    "ruff>=0.16.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = ["**/migrations/*"]   # 自動生成ファイルは対象外
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "DJ"]    # 基本 + import 順 + バグの芽 + Django 向け
+
+[tool.mypy]
+python_version = "3.14"
+plugins = ["mypy_django_plugin.main"]  # Django のモデルを型として理解させる
+exclude = ["/migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
