@@ -186,7 +186,7 @@ docker compose exec db mysql -udjango -pdjango blog -e "SELECT VERSION();"   # 8
 > 両方を同時に起動できます。
 
 > 🔓 **教材用の簡略化**: パスワードを `compose.yaml` に直接書いている。
-> **本番では**: 環境変数やシークレット管理から渡す。第2部ステップ1で `.env` に移す。
+> **本番では**: 環境変数やシークレット管理から渡す。第2部ステップ1で `.env` に移す（`SECRET_KEY` だけは先にステップ1-1 で移す）。
 > 根拠: https://hub.docker.com/_/mysql （"Docker Secrets" の節）
 
 Django から MySQL への接続設定（`settings.py` の `DATABASES`）は、ステップ1-1 で書きます。
@@ -237,7 +237,7 @@ roadmap-sh-django/
 
 | # | タイトル | 作るもの | 初出（Django/Ninja） | 重要度 |
 | --- | --- | --- | --- | --- |
-| 1-1 | プロジェクトを動かす | MySQL につながった状態で `runserver` が起動する | `settings.py`, `urls.py` | 🔴 |
+| 1-1 | プロジェクトを動かす | MySQL につながった状態で `runserver` が起動する。`SECRET_KEY` を `.env` に移し、鍵を作り直す | `settings.py`, `urls.py` | 🔴 |
 | 1-2 | カスタムユーザーモデル | `accounts.User` を定義し、Django に「これを使え」と伝える | `AbstractUser`, `AUTH_USER_MODEL` | 🔴 |
 | 1-3 | モデルを書く → マイグレーション | `Post` が MySQL のテーブルになる（`SHOW COLUMNS` で確認） | `models.Model` とフィールド, マイグレーション | 🔴 |
 | 1-4 | 管理画面でデータを入れて見る | 管理画面から Post を3件登録できる | `admin.site.register`, 管理画面 | 🟡 |
@@ -250,6 +250,9 @@ roadmap-sh-django/
 | 1-11 | 削除 | `DELETE /api/posts/{id}` が 204 を返す | `delete()`, ステータスコードの指定 | 🔴 |
 | 1-12 | テストで固定する | CRUD の pytest が通る（テスト用 DB の権限もここで設定） | `pytest.mark.django_db`, Ninja `TestClient` | 🔴 |
 
+`SECRET_KEY` だけは 1-1 で `.env` に移します。このリポジトリは GitHub で公開しており、`startproject` が作った鍵がすでに履歴に残っているためです。
+鍵を作り直せば、履歴に残った古い鍵はどこでも使われない文字列になります。`.env` を読み込む方法（uv の `--env-file` か、ライブラリを1つ足すか）は、1-1 を書くときに両方試して決めます。
+
 山場は **1-6 → 1-7** です。手書きで苦労した部分が、Ninja でどこに消えたかを並べて見ます。
 1-1〜1-12 では認証も pre-commit も入れません。全エンドポイント公開で進めます。
 
@@ -257,7 +260,7 @@ roadmap-sh-django/
 
 | # | タイトル | 作るもの | 初出（Django/Ninja） | 重要度 |
 | --- | --- | --- | --- | --- |
-| 2-1 | API をアプリごとに分ける | `blog/api.py` に分割。pre-commit 導入、秘密情報を `.env` へ | Ninja `Router`, 環境変数からの設定読み込み | 🔴 |
+| 2-1 | API をアプリごとに分ける | `blog/api.py` に分割。pre-commit 導入。`DEBUG`・DB の接続情報も `.env` へ | Ninja `Router` | 🔴 |
 | 2-2 | カテゴリ（多対一） | Post が1つの Category に属する | `ForeignKey`, `on_delete` | 🔴 |
 | 2-3 | タグ（多対多） | Post に複数の Tag。レスポンスに入れ子で出す | `ManyToManyField`, 入れ子の `Schema` | 🔴 |
 | 2-4 | N+1 問題を見て直す | 一覧の SQL 本数を数え、1〜2本に減らす | `select_related`, `prefetch_related` | 🔴 |
