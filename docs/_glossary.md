@@ -18,3 +18,6 @@
 | フィールド | field（`CharField` など） | 台帳の1列。種類ごとにクラスがある | 第1部-3 |
 | マイグレーション | migration | 台帳を書き換える手続き。SQL は Django が作る。`makemigrations` で手続き書を作り、`migrate` で DB に流す | 第1部-3 |
 | マイグレーションファイル | migration file | `migrations/0001_initial.py` など。手続き書。Git にコミットする | 第1部-3 |
+| 管理画面 | Django admin | データを見るための窓。`admin.py` に1行書くと、そのモデルの一覧・追加画面ができる。学習対象ではない | 第1部-4 |
+| スーパーユーザー | superuser | 管理画面に入れる、すべての権限を持つユーザー。`createsuperuser` で作る | 第1部-4 |
+| ハッシュ | hash | 元に戻せない形に変えた値。パスワードはこの形で保存される | 第1部-4 |

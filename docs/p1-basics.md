@@ -487,3 +487,147 @@ No changes detected
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ4` — 管理画面でデータを入れて見る
+
+---
+
+## 第1部-4: 管理画面でデータを入れて見る
+
+**❓ この回の問い**: テーブルはできた。では、中にデータを入れて目で確かめるには？
+
+**作るもの**: 管理画面から `Post` を2件登録し、MySQL で確かめる
+**重要度**: 🟡 読めればよい — 登録の1行を書くだけ。以降の確認に使う
+**前ステップとの接続**: 1-3 の `Post` を、管理画面に載せる
+
+> **管理画面は学習対象ではありません。** データを見るための窓として使います。見た目の調整（カスタマイズ）は扱いません。
+
+### 4-0. このステップの初出
+
+**Django / Ninja**: `admin.site.register`, 管理画面 / **Python**: `from .models import`
+
+### 4-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`blog/admin.py`（全文）
+
+```python
+from django.contrib import admin
+
+from .models import Post
+
+# Post を管理画面に出す（見た目の調整はしない）
+admin.site.register(Post)
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+```bash
+uv run python manage.py createsuperuser   # 管理画面に入れるユーザーを作る（対話式）
+uv run python manage.py runserver
+```
+
+```text
+Username: admin
+Email address: admin@example.com
+Password:
+Password (again):
+Superuser created successfully.
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（検証は `--noinput` で実施）
+
+ブラウザで `http://127.0.0.1:8000/admin/` を開き、ログインします。**Posts → 追加** から2件登録し、MySQL で中身を見ます。
+
+```bash
+docker compose exec db mysql -udjango -pdjango --default-character-set=utf8mb4 blog \
+  -e "SELECT id, title, created_at FROM blog_post; SELECT username, LEFT(password, 30) FROM accounts_user;"
+```
+
+```text
+id  title           created_at
+1   はじめての投稿  2026-10-07 12:30:30.921057
+2   二つ目の投稿    2026-10-07 12:30:30.946455
+username  LEFT(password, 30)
+admin     pbkdf2_sha256$1000000$1WFvz3fu
+```
+
+✅ 検証済み: MySQL 8.4.11（出力は列を揃えて表示）
+
+> 🧒 **かみくだくと**: `--default-character-set=utf8mb4` は表示の文字コード。無いと日本語が `???` に見える。
+
+> ✅ **回収**: 1-1 の `admin.site.urls` は、ここで登録した画面の URL 一式。1-3 の `__str__` は、一覧に出る名前になる（4-6）。
+
+### 4-2. 🔬 仕組み解剖
+
+| | `admin.site.register` | 管理画面 |
+| --- | --- | --- |
+| 正式名称 | `AdminSite.register` | Django admin |
+| いつ・誰が | 起動時に各アプリの `admin.py` が自動で読まれ、登録簿に載る | リクエストごとに登録簿を見て、一覧・追加画面を作る |
+| TS での対応物 | 対応物なし。モデルから画面を自動で作る標準が無い | 同左 |
+| なぜこの設計 | 1行で CRUD の画面ができる | 確認用の API を作らずに済む |
+| 失敗すると | 登録し忘れると一覧に出ない | 未ログインは `/admin/login/` へ 302 |
+
+```text
+【起動時】
+  INSTALLED_APPS の各アプリの admin.py を読む
+    └→ admin.site.register(Post) … 登録簿に Post を載せる
+
+【リクエスト時】GET /admin/blog/post/
+  urls.py の "admin/" → admin.site.urls → 登録簿から Post の一覧を作る
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17
+
+見てほしいのは、**登録は起動時、画面づくりはリクエスト時**という分担です。
+
+> ⏭️ **後で回収**: 管理画面のログインは「セッション認証」。第2部-6 で JWT と並べて比べる。
+
+### 4-3. 🐍 Python注
+
+> 🐍 `from .models import Post` の `.` は同じフォルダ。TS の `import { Post } from "./models"` と同じ。
+
+### 4-4. 解説 — なぜこう設計するか
+
+`accounts.User` は登録していないので画面に出ません。今は記事だけで足ります。
+
+🧠 Django の考え方: よくある作業は、宣言1行で済むようにする。
+
+### 4-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 管理画面は組織内の管理用。サイトの表側として作るものではない。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/contrib/admin/
+
+### 4-6. 🔮 予測 → 動作確認
+
+1. `blog/models.py` の `__str__` を消すと、一覧の表示はどうなる？（試したら戻す）
+2. `password` 列に、入力したパスワードはそのまま入っている？
+
+<details><summary>答え</summary>
+
+1. `Post object (1)` になる（検証済み）
+2. 入っていない。`pbkdf2_sha256$...` は元に戻せない形（ハッシュ）に変えた値
+
+</details>
+
+### 4-7. ✅ 想起チェック
+
+1. `admin.site.register(Post)` が実行されるのは、起動時？ リクエスト時？
+
+<details><summary>答え</summary>
+
+1. 起動時
+
+</details>
+
+### 4-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **管理画面は、`admin.py` に1行書けば使える「データを見る窓」。**
+
+📒 用語集に追記: 管理画面 / スーパーユーザー / ハッシュ
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ5` — `JsonResponse` で一覧 GET を手書き
