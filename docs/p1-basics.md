@@ -631,3 +631,184 @@ admin     pbkdf2_sha256$1000000$1WFvz3fu
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ5` — `JsonResponse` で一覧 GET を手書き
+
+---
+
+## 第1部-5: `JsonResponse` で一覧 GET を手書き
+
+**❓ この回の問い**: データは管理画面で見えた。JSON で返すには何を書くのか？
+
+**作るもの**: `GET /api/posts/` が記事の一覧を JSON で返す
+**重要度**: 🔴 毎日使う — API の土台。1-7 で Ninja が肩代わりする部分
+**前ステップとの接続**: 1-4 で入れた2件を JSON で取り出す
+
+### 5-0. このステップの初出
+
+**Django / Ninja**: `JsonResponse`（ビュー関数の戻り値）, `QuerySet` / **Python**: リスト内包表記
+
+> 🧒 **かみくだくと**: **ビュー関数**は担当職員。リクエストを受け取り、返事を作る。
+> **ORM** は台帳を引く職員。Python で書くと SQL にして MySQL に聞く。
+
+### 5-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`blog/views.py`（全文）
+
+```python
+from django.http import HttpRequest, JsonResponse
+
+from .models import Post
+
+
+def post_list(request: HttpRequest) -> JsonResponse:
+    # 台帳（blog_post）から全件を取り出す。この時点ではまだ SQL は飛ばない
+    posts = Post.objects.all()
+
+    # 1件ずつ辞書に組み直す。ここで初めて SQL が1本飛ぶ
+    data = [
+        {
+            "id": post.id,
+            "title": post.title,
+            "body": post.body,
+            "created_at": post.created_at,
+        }
+        for post in posts
+    ]
+
+    # 辞書ではなくリストを返すので safe=False が要る
+    return JsonResponse(data, safe=False)
+```
+
+`config/urls.py`（全文。冒頭の説明コメントは消してよい）
+
+```python
+from django.contrib import admin
+from django.urls import path
+
+from blog import views
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("api/posts/", views.post_list),  # 一覧 API
+]
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+```bash
+uv run python manage.py runserver
+# 別のターミナルで
+curl -s http://127.0.0.1:8000/api/posts/ | uv run python -m json.tool --no-ensure-ascii
+```
+
+```json
+[
+    {
+        "id": 1,
+        "title": "はじめての投稿",
+        "body": "本文です",
+        "created_at": "2026-10-07T12:46:16.644Z"
+    },
+    {
+        "id": 2,
+        "title": "二つ目の投稿",
+        "body": "本文です",
+        "created_at": "2026-10-07T12:46:16.646Z"
+    }
+]
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（`json.tool` は表示を整えるだけ）
+
+SQL は shell（`uv run python manage.py shell`）で見られます。
+
+```python
+>>> from blog.models import Post
+>>> qs = Post.objects.all()   # まだ SQL は飛ばない
+>>> print(qs.query)           # 飛ぶ予定の SQL を表示するだけ
+SELECT `blog_post`.`id`, `blog_post`.`title`, `blog_post`.`body`, `blog_post`.`created_at`, `blog_post`.`updated_at` FROM `blog_post`
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+### 5-2. 🔬 仕組み解剖
+
+| | `JsonResponse` | `QuerySet` |
+| --- | --- | --- |
+| 正式名称 | `django.http.JsonResponse` | `QuerySet`（`Post.objects` から作る） |
+| いつ・誰が | ビューが返したあと JSON 文字列に変える。日時も変換する | 中身が要るとき（`for` など）に1回だけ SQL を出す |
+| TS での対応物 | Express の `res.json(data)` | 対応物なし。TS の配列は作った時点で中身がある |
+| なぜこの設計 | `Content-Type` も自動で付く | 条件を足してから1本の SQL にできる |
+| 失敗すると | リストを `safe=False` なしで渡すと `TypeError`（500） | テーブルが無いと MySQL のエラー |
+
+```text
+GET /api/posts/（窓口に来た人）
+  └→ config/urls.py（受付の案内表）… "api/posts/" に一致
+       └→ blog/views.py の post_list（担当職員）
+            ├→ Post.objects.all()（台帳を引く職員）… まだ何もしない
+            ├→ for で回す → SELECT … FROM blog_post（MySQL）
+            └→ JsonResponse(...) → JSON を返す（200）
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+見てほしいのは、**SQL が飛ぶのは `all()` ではなく `for` の行**です。
+
+### 5-3. 🐍 Python注
+
+> 🐍 `[{...} for post in posts]` はリスト内包表記。TS の `posts.map((post) => ({...}))` と同じ。
+
+### 5-4. 解説 — なぜこう設計するか
+
+ビューは「引く → 組み直す → 返す」の3段です。何を返すか（`updated_at` は返さない）もここで決まります。
+
+🧠 Django の考え方: SQL は必要になるまで出さない（遅延評価）。
+根拠: https://docs.djangoproject.com/en/5.2/topics/db/queries/#querysets-are-lazy
+
+### 5-5. 🔮 予測 → 動作確認
+
+1. `qs = Post.objects.all()` の時点で SQL は何本？ `for` で回したあとは？
+2. 生の `curl` では、日本語はどう見える？
+3. `safe=False` を消して叩くと？（試したら戻す）
+
+```bash
+curl -s http://127.0.0.1:8000/api/posts/
+```
+
+```text
+[{"id": 1, "title": "\u306f\u3058\u3081\u3066\u306e\u6295\u7a3f", ...
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+<details><summary>答え</summary>
+
+1. 0本 → 1本（接続直後の準備用 SQL を除く）
+2. `\u306f…` になる。正しい JSON で、受け取る側で日本語に戻る
+3. 500。ログに `TypeError: In order to allow non-dict objects to be serialized set the safe parameter to False.`
+
+</details>
+
+### 5-6. ✅ 想起チェック
+
+1. `Post.objects.all()` と書いた行で、SQL は飛ぶ？
+
+<details><summary>答え</summary>
+
+1. 飛ばない
+
+</details>
+
+### 5-7. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`QuerySet` は使うまで SQL を出さない。ビューは組み直して `JsonResponse` で返す。**
+
+📒 用語集に追記: ビュー関数 / ORM / QuerySet / 遅延評価
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ6` — `JsonResponse` で POST を手書き
