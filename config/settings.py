@@ -25,7 +25,8 @@ SECRET_KEY = "django-insecure-d3@=z0m$w8lld8+1spho!49f$1j+fmp9vv0454$kk(^(k5qyzz
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# このサーバが受け付けるホスト名
+ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 
 
 # Application definition
@@ -37,6 +38,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "accounts",  # 追加: accounts アプリを登録する
+    "blog",  # 追加: blog アプリを登録する
 ]
 
 MIDDLEWARE = [
@@ -74,8 +77,13 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.mysql",  # mysqlclient を使う
+        "NAME": "blog",
+        "USER": "django",
+        "PASSWORD": "django",
+        "HOST": "127.0.0.1",
+        "PORT": "3307",  # compose.yaml で公開したポート
+        "OPTIONS": {"charset": "utf8mb4"},  # 絵文字も保存できる文字コード
     }
 }
 
@@ -120,3 +128,6 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# 末尾に追加: 標準の auth.User の代わりに、accounts アプリの User を使う
+AUTH_USER_MODEL = "accounts.User"
