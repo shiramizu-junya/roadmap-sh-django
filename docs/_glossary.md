@@ -34,3 +34,5 @@
 | OpenAPI | OpenAPI Specification | API の説明書の決まった書き方（中身は JSON）。Ninja が宣言から自動で作る | 第1部-8 |
 | Swagger UI | Swagger UI | OpenAPI の説明書を画面にし、ブラウザから API を試せる道具。`/api/docs` | 第1部-8 |
 | タプル | tuple | 複数の値をひと組にしたもの。`return 201, post` は2つの値の組を返す | 第1部-8 |
+| パスパラメータ | path parameter（`{post_id}`） | URL の一部を値として受け取る仕組み。`/posts/3` の `3` を引数にする | 第1部-9 |
+| 404 | 404 Not Found | 「探したものが無い」を表すステータス。`get_object_or_404` が無いときに返す | 第1部-9 |

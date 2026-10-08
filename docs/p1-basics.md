@@ -1331,3 +1331,136 @@ config/api.py の宣言（PostIn / PostOut / @api.post）
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ9` — 1件取得
+
+---
+
+## 第1部-9: 1件取得
+
+**❓ この回の問い**: 一覧と作成はできた。URL で「この1件」を指して、無ければ 404 を返すには？
+
+**作るもの**: `GET /api/posts/{post_id}` が1件を返す。無ければ 404
+**重要度**: 🔴 毎日使う — 詳細・更新・削除のすべてで使う形
+**前ステップとの接続**: 1-8 の `config/api.py` に関数を1つ足す
+
+### 9-0. このステップの初出
+
+**Django / Ninja**: パスパラメータ, `get_object_or_404` / **Python**: なし
+
+> 🧒 **かみくだくと**: **パスパラメータ**は、URL の一部を値として受け取る仕組み。`/posts/3` の `3` を引数にする。
+
+### 9-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`config/api.py`（差分。import を1行、末尾に関数を1つ足す）
+
+```python
+from django.shortcuts import get_object_or_404  # import 群に足す
+
+# （中略）
+
+
+@api.get("/posts/{post_id}", response=PostOut)
+def get_post(request: HttpRequest, post_id: int):
+    # {post_id} の部分が、同じ名前の引数に int で渡される
+    return get_object_or_404(Post, id=post_id)  # 無ければ 404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1（ruff・mypy も通過）
+
+```bash
+curl -s -w '\n%{http_code}\n' http://127.0.0.1:8000/api/posts/1
+curl -s -w '\n%{http_code}\n' http://127.0.0.1:8000/api/posts/999
+```
+
+```text
+{"id": 1, "title": "はじめての投稿", "body": "本文です", "created_at": "2026-10-08T13:11:10.075Z"}
+200
+{"detail": "Not Found: No Post matches the given query."}
+404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（日本語は読める形に直して表示）
+
+発行される SQL（shell で確認）:
+
+```sql
+SELECT `blog_post`.`id`, `blog_post`.`title`, `blog_post`.`body`, `blog_post`.`created_at`, `blog_post`.`updated_at` FROM `blog_post` WHERE `blog_post`.`id` = 1 LIMIT 21
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+### 9-2. 🔬 仕組み解剖
+
+| | パスパラメータ | `get_object_or_404` |
+| --- | --- | --- |
+| 正式名称 | Path parameters（`{post_id}`） | ショートカット関数 `get_object_or_404` |
+| いつ・誰が | リクエストごとに URL から取り出し、`int` で検査する | 1件を探す SQL を出す。無ければ `Http404` を投げる |
+| TS での対応物 | Express の `/posts/:id` と `req.params.id` | 対応物なし（ORM の機能） |
+| なぜこの設計 | 型注釈で数字の検査まで済む | 「探す → 無ければ 404」を1行に |
+| 失敗すると | 数字でなければ 422 | 無ければ 404 |
+
+```text
+GET /api/posts/999
+  └→ Ninja: "999" を int に変換 … 数字でなければ 422
+       └→ get_object_or_404(Post, id=999)
+            ├─ 見つかった  → PostOut で整形 → 200
+            └─ 無い        → Http404 → Ninja が {"detail": …} → 404
+```
+
+✅ 検証済み: 200・404・422 のすべてを curl で確認
+
+見てほしいのは、**404 を返すコードを自分では書いていない**ことです。
+
+### 9-3. 🐍 Python注
+
+（この回は新しい文法なし）
+
+### 9-4. 解説 — なぜこう設計するか
+
+SQL の `LIMIT 21` は、1件のはずが複数あったときに気づくための上限です。
+
+🧠 Django の考え方: 「よくある失敗」は、決まった形で返す近道を用意する。
+
+### 9-5. 🔓 教材用の簡略化
+
+> 🔓 **教材用の簡略化**: 404 の本文に `No Post matches the given query.` という内部の説明が出ている。`DEBUG = True` だから。
+> **本番では**: `DEBUG = False` なら `{"detail": "Not Found"}` だけになる。
+> 根拠: https://github.com/vitalik/django-ninja/blob/master/ninja/errors.py （`_default_404`）
+
+### 9-6. 🔮 予測 → 動作確認
+
+1. `/api/posts/abc` を叩くと、404？ 422？
+2. `/api/posts/1/`（末尾にスラッシュ）では？
+3. URL を `"/posts/{int:post_id}"` に変えると、`/api/posts/abc` は？（試したら戻す）
+
+<details><summary>答え</summary>
+
+1. 422。`Input should be a valid integer`（URL は一致し、型の検査で落ちる）
+2. 404。URL が一致しない
+3. 404。`int:` は Django の型付き URL。数字以外は URL が一致しなくなる（検証済み）
+
+</details>
+
+### 9-7. ✅ 想起チェック
+
+1. `get_object_or_404` は、見つからないとき何を投げる？ それを 404 に変えるのは誰？
+
+<details><summary>答え</summary>
+
+1. `Http404` を投げる。Ninja が 404 の JSON に変える
+
+</details>
+
+### 9-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **1件取得は `{post_id}` と `get_object_or_404` の組で書く。**
+
+📒 用語集に追記: パスパラメータ / 404
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ10` — 更新
