@@ -25,3 +25,6 @@
 | ORM | Object-Relational Mapper | 台帳を代わりに引いてくれる職員。Python で書いた問い合わせを SQL にして DB に聞く | 第1部-5 |
 | QuerySet | QuerySet | 「この条件で台帳を引く」という予定表。使うまで SQL を出さない | 第1部-5 |
 | 遅延評価 | lazy evaluation | 必要になるまで実行しないこと。`QuerySet` は `for` などで中身が要るときに SQL を出す | 第1部-5 |
+| CSRF | Cross-Site Request Forgery | 別のサイトから勝手に送信させる攻撃。Django は既定で POST などを検査し、印が無いと 403 で止める | 第1部-6 |
+| デコレータ | decorator（`@`） | 直下の関数を包んで機能を足す書き方。`@csrf_exempt` など | 第1部-6 |
+| バリデーション | validation | 申請書の書式チェック。受け取った値が必須・型・長さの条件を満たすか確かめること | 第1部-6 |

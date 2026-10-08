@@ -812,3 +812,195 @@ curl -s http://127.0.0.1:8000/api/posts/
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ6` — `JsonResponse` で POST を手書き
+
+---
+
+## 第1部-6: `JsonResponse` で POST を手書き
+
+**❓ この回の問い**: GET は書けた。送られた JSON を保存する前に、何を確かめるのか？
+
+**作るもの**: `POST /api/posts/` で記事を作る。誤りには 400 で理由を返す
+**重要度**: 🔴 毎日使う — 1-7 で Ninja が肩代わりする中身
+**前ステップとの接続**: 1-5 の `post_list` に POST を足す
+
+### 6-0. このステップの初出
+
+**Django / Ninja**: `csrf_exempt`, `objects.create()` / **Python**: `@`（デコレータ）, `try`/`except`, `isinstance`
+
+> 🧒 **かみくだくと**: **CSRF** は、別のサイトから勝手に送信させる攻撃。
+> Django は、POST に「正規の画面から来た印」が無いと 403 で止める。
+
+### 6-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`blog/views.py`（全文。1-5 の内容も含む）
+
+```python
+import json
+
+from django.http import HttpRequest, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from .models import Post
+
+
+def post_to_dict(post: Post) -> dict[str, object]:
+    # 1件の Post を、返す形（辞書）に組み直す
+    return {
+        "id": post.id,
+        "title": post.title,
+        "body": post.body,
+        "created_at": post.created_at,
+    }
+
+
+@csrf_exempt  # このビューだけ CSRF の検査を外す（理由は 6-2）
+def post_list(request: HttpRequest) -> JsonResponse:
+    if request.method == "GET":
+        data = [post_to_dict(post) for post in Post.objects.all()]
+        return JsonResponse(data, safe=False)
+
+    if request.method == "POST":
+        return create_post(request)
+
+    return JsonResponse({"detail": "許可されていないメソッドです"}, status=405)
+
+
+def create_post(request: HttpRequest) -> JsonResponse:
+    # ① 本文を JSON として読む
+    try:
+        payload = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "JSON として読めません"}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"detail": "JSON はオブジェクトで送ってください"}, status=400)
+
+    # ② 必須チェックと型チェック。エラーは項目ごとに集める
+    errors: dict[str, str] = {}
+    title = payload.get("title")
+    body = payload.get("body")
+
+    if title is None:
+        errors["title"] = "必須です"
+    elif not isinstance(title, str):
+        errors["title"] = "文字列で送ってください"
+    elif len(title) > 200:
+        errors["title"] = "200文字以内にしてください"
+
+    if body is None:
+        errors["body"] = "必須です"
+    elif not isinstance(body, str):
+        errors["body"] = "文字列で送ってください"
+
+    # isinstance も条件に入れると、この先で両方が str だと mypy にも伝わる
+    if errors or not isinstance(title, str) or not isinstance(body, str):
+        return JsonResponse({"errors": errors}, status=400)
+
+    # ③ 保存して、作ったものを 201 で返す
+    post = Post.objects.create(title=title, body=body)
+    return JsonResponse(post_to_dict(post), status=201)
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（ruff・mypy も通過）
+
+```bash
+curl -s -w '\n%{http_code}\n' -X POST http://127.0.0.1:8000/api/posts/ \
+  -H 'Content-Type: application/json' -d '{"title": "三つ目の投稿", "body": "POST で作った"}'
+curl -s -w '\n%{http_code}\n' -X POST http://127.0.0.1:8000/api/posts/ \
+  -H 'Content-Type: application/json' -d '{"title": 123}'
+```
+
+```text
+{"id": 3, "title": "三つ目の投稿", "body": "POST で作った", "created_at": "2026-10-07T23:32:07.327Z"}
+201
+{"errors": {"title": "文字列で送ってください", "body": "必須です"}}
+400
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（日本語は `\u…` を読める形に直して表示。`id` は手元のデータ件数で変わる）
+
+`create()` が出す SQL（shell の `connection.queries` で表示）:
+
+```sql
+INSERT INTO `blog_post` (`title`, `body`, `created_at`, `updated_at`) VALUES ('shell から', 'b', '2026-10-07 23:32:35.603592', '2026-10-07 23:32:35.603607')
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+> ✅ **回収（1-3）**: 作成時刻は Django が `INSERT` に書き込む。
+
+### 6-2. 🔬 仕組み解剖
+
+| | `csrf_exempt` | `objects.create()` |
+| --- | --- | --- |
+| 正式名称 | `csrf_exempt` | `QuerySet.create()` |
+| いつ・誰が | 起動時に関数へ印を付ける。リクエスト時、CSRF 検査がその印を見て通す | 呼んだ瞬間に `INSERT` を出す（遅延しない） |
+| TS での対応物 | TS のデコレータ（`@`）と同じ形 | 対応物なし（ORM の機能） |
+| なぜこの設計 | 検査は全体に掛け、外すときは明示する | 作成と保存を1行で |
+| 失敗すると | 外さないと 403 | 値は検査しない。長すぎると MySQL の `DataError (1406)` |
+
+```text
+POST /api/posts/
+  ├─ ① JSON として読めない             → 400  {"detail": "…"}
+  ├─ ② 必須・型・長さのどれかが違う    → 400  {"errors": {項目: 理由}}
+  └─ 問題なし → Post.objects.create()  → 201  作った記事
+```
+
+✅ 検証済み: 3つの分かれ道すべてを curl で確認
+
+見てほしいのは、**保存前の関門2つを自分で書いている**ことです。
+
+### 6-3. 🐍 Python注
+
+> 🐍 `@csrf_exempt` はデコレータ。直下の関数を包んで機能を足す。
+> 🐍 `try`/`except` は TS の `try`/`catch`。`isinstance(x, str)` は `typeof x === "string"`。
+
+### 6-4. 解説 — なぜこう設計するか
+
+`create_post` は約30行。ほとんどが値を信用しないための関門です。
+
+🧠 Django の考え方: 外から来た値は保存前に確かめる。
+
+### 6-5. 🔓 教材用の簡略化
+
+> 🔓 **教材用の簡略化**: `csrf_exempt` で検査を外している。第1部は誰でも書ける API なので、失うものが無い。
+> **本番では**: Cookie でログインする API なら外さない。JWT との違いは第2部-6 で表にする。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/csrf/#how-it-works
+
+### 6-6. 🔮 予測 → 動作確認
+
+1. `csrf_exempt` が無いと、POST で何が返る？
+2. 201文字の `title` を送ると？
+3. `PUT` では？
+
+<details><summary>答え</summary>
+
+1. 403 `CSRF verification failed.`（検証済み）
+2. 400 `{"errors": {"title": "200文字以内にしてください"}}`
+3. 405 `{"detail": "許可されていないメソッドです"}`
+
+</details>
+
+### 6-7. ✅ 想起チェック
+
+1. 保存の前に確かめていることを2つ挙げると？
+
+<details><summary>答え</summary>
+
+1. JSON として読めるか。項目・型・長さが正しいか
+
+</details>
+
+### 6-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **手書きの API では、受け取った値の検査を全部自分で書く。**
+
+📒 用語集に追記: CSRF / デコレータ / バリデーション
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ7` — 同じものを Ninja で書き直す
