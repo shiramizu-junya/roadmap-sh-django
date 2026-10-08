@@ -28,3 +28,6 @@
 | CSRF | Cross-Site Request Forgery | 別のサイトから勝手に送信させる攻撃。Django は既定で POST などを検査し、印が無いと 403 で止める | 第1部-6 |
 | デコレータ | decorator（`@`） | 直下の関数を包んで機能を足す書き方。`@csrf_exempt` など | 第1部-6 |
 | バリデーション | validation | 申請書の書式チェック。受け取った値が必須・型・長さの条件を満たすか確かめること | 第1部-6 |
+| Django Ninja | Django Ninja | Django の上に乗る薄い層。型注釈から入力の検査や API の説明書を作る | 第1部-7 |
+| Pydantic | Pydantic | 型注釈をもとに値を検査・変換するライブラリ。Ninja の中で動く | 第1部-7 |
+| スキーマ | schema（`ninja.Schema`） | 申請書の書式。何を・どの型で・どんな条件で受け取るかの宣言 | 第1部-7 |

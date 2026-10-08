@@ -1004,3 +1004,166 @@ POST /api/posts/
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ7` — 同じものを Ninja で書き直す
+
+---
+
+## 第1部-7: 同じものを Ninja で書き直す
+
+**❓ この回の問い**: 1-6 の検査は約30行。もっと短く確実に書けないか？
+
+**作るもの**: 一覧と作成を Ninja で書き直す（手書き版は `/manual/posts/` へ）
+**重要度**: 🔴 毎日使う — 以降の API はすべてこの形
+**前ステップとの接続**: 1-6 の検査を Ninja に任せる
+
+### 7-0. このステップの初出
+
+**Django / Ninja**: `NinjaAPI` とデコレータ, `Schema` / **Python**: クラス属性の型注釈
+
+> 🧒 **かみくだくと**: **Django Ninja** は Django の上の薄い層。**Pydantic** は型注釈で値を検査する部品で、Ninja の中で動く。
+
+### 7-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`config/api.py`（新規・全文）
+
+```python
+from django.http import HttpRequest
+from ninja import Field, NinjaAPI, Schema
+
+from blog.models import Post
+from blog.views import post_to_dict  # 返す形は 1-6 の手書き版を使い回す
+
+api = NinjaAPI()
+
+
+class PostIn(Schema):
+    # 申請書の書式: 何を・どの型で・どんな条件で受け取るか
+    title: str = Field(max_length=200)
+    body: str
+
+
+@api.get("/posts")
+def list_posts(request: HttpRequest) -> list[dict[str, object]]:
+    return [post_to_dict(post) for post in Post.objects.all()]
+
+
+@api.post("/posts")
+def create_post(request: HttpRequest, payload: PostIn) -> dict[str, object]:
+    # ここに来た時点で、payload は検査済み（title も body も str）
+    post = Post.objects.create(title=payload.title, body=payload.body)
+    return post_to_dict(post)
+```
+
+`config/urls.py`（全文）
+
+```python
+from django.contrib import admin
+from django.urls import path
+
+from blog import views
+from config.api import api
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("manual/posts/", views.post_list),  # 1-5・1-6 の手書き版（比較用に残す）
+    path("api/", api.urls),  # Ninja の API 一式
+]
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過）
+
+```bash
+curl -s -w '\n%{http_code}\n' -X POST http://127.0.0.1:8000/api/posts \
+  -H 'Content-Type: application/json' -d '{"title": "Ninja で作った", "body": "b"}'
+curl -s -w '\n%{http_code}\n' -X POST http://127.0.0.1:8000/api/posts \
+  -H 'Content-Type: application/json' -d '{"title": 123}'
+```
+
+```text
+{"id": 4, "title": "Ninja で作った", "body": "b", "created_at": "2026-10-08T12:33:18.675Z"}
+200
+{"detail": [{"type": "string_type", "loc": ["body", "payload", "title"], "msg": "Input should be a valid string"}, {"type": "missing", "loc": ["body", "payload", "body"], "msg": "Field required"}]}
+422
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（日本語は読める形に直して表示。`id` は手元の件数で変わる）
+
+**手書き版との差分** — `create_post` は 28行 → 5行（空行を除く）
+
+| 1-6 の手書き | 1-7 の Ninja | 肩代わり |
+| --- | --- | --- |
+| `request.method` の分岐と 405 | `@api.get` / `@api.post` | Ninja（405） |
+| `json.loads` と `try`/`except` | 書かない | Ninja（400） |
+| 必須・型・長さの `if` の山 | `title: str = Field(max_length=200)` | Pydantic（違えば 422） |
+| エラーの形を組む | 書かない | Ninja（`{"detail": [...]}`） |
+| `@csrf_exempt` | 書かない | Ninja（Cookie 認証なしなら検査不要） |
+
+根拠（CSRF）: https://django-ninja.dev/guide/csrf/
+
+### 7-2. 🔬 仕組み解剖
+
+| | `NinjaAPI` とデコレータ | `Schema` |
+| --- | --- | --- |
+| 正式名称 | `NinjaAPI` と `@api.get` など | `ninja.Schema`（Pydantic） |
+| いつ・誰が | 起動時に関数を登録し、URL 一式を作る | 関数を呼ぶ**前に**毎回検査する |
+| TS での対応物 | Express の `app.get` など | zod の `z.object({...})` |
+| なぜこの設計 | メソッドごとに関数を分けられる | 型注釈で検査が済む |
+| 失敗すると | 405 | 422（項目ごとの理由付き） |
+
+```text
+POST /api/posts（窓口に来た人）
+  └→ Ninja が本文を JSON として読む           … 読めなければ 400
+       └→ Pydantic が PostIn の書式で検査     … 合わなければ 422
+            └→ create_post(request, payload)  … ここから自分のコード
+```
+
+✅ 検証済み: 400・422・200 のすべてを curl で確認
+
+見てほしいのは、**検査が関数の外に移った**ことです。
+
+### 7-3. 🐍 Python注
+
+> 🐍 `title: str = Field(...)` は型付きのクラス属性。TS の `title: string` に条件を足した形。
+> 🐍 Python の型注釈は実行時にも残る（TS は消える）。Ninja はそれで検査する。
+
+### 7-4. 解説 — なぜこう設計するか
+
+保存は Django のまま。Ninja が足したのは検査だけです。
+
+🧠 Django の考え方: 書式チェックは Ninja、台帳は Django。
+
+### 7-5. 🔮 予測 → 動作確認
+
+1. 作成成功のステータスは 201？ 200？
+2. `/api/posts/`（末尾にスラッシュ）を叩くと？
+
+<details><summary>答え</summary>
+
+1. 200。201 には出力の形の宣言が要る（1-8）
+2. 404。URL は `posts` なので一致しない
+
+</details>
+
+### 7-6. ✅ 想起チェック
+
+1. `payload: PostIn` と書くと、関数が呼ばれる前に何が起きる？
+
+<details><summary>答え</summary>
+
+1. JSON が読まれ、`PostIn` の書式で検査される
+
+</details>
+
+### 7-7. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`Schema` に書式を宣言すれば、検査は関数の前に Ninja が済ませる。**
+
+📒 用語集に追記: Django Ninja / Pydantic / スキーマ
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ8` — Swagger UI と OpenAPI
