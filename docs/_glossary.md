@@ -31,3 +31,6 @@
 | Django Ninja | Django Ninja | Django の上に乗る薄い層。型注釈から入力の検査や API の説明書を作る | 第1部-7 |
 | Pydantic | Pydantic | 型注釈をもとに値を検査・変換するライブラリ。Ninja の中で動く | 第1部-7 |
 | スキーマ | schema（`ninja.Schema`） | 申請書の書式。何を・どの型で・どんな条件で受け取るかの宣言 | 第1部-7 |
+| OpenAPI | OpenAPI Specification | API の説明書の決まった書き方（中身は JSON）。Ninja が宣言から自動で作る | 第1部-8 |
+| Swagger UI | Swagger UI | OpenAPI の説明書を画面にし、ブラウザから API を試せる道具。`/api/docs` | 第1部-8 |
+| タプル | tuple | 複数の値をひと組にしたもの。`return 201, post` は2つの値の組を返す | 第1部-8 |

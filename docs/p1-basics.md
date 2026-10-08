@@ -1167,3 +1167,167 @@ POST /api/posts（窓口に来た人）
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ8` — Swagger UI と OpenAPI
+
+---
+
+## 第1部-8: Swagger UI と OpenAPI
+
+**❓ この回の問い**: 1-7 は入力だけ宣言した。出力も宣言すると何が手に入るのか？
+
+**作るもの**: `PostOut` を宣言して作成を 201 にし、`/api/docs` から試す
+**重要度**: 🔴 毎日使う — 以降の API は入出力を必ず宣言する
+**前ステップとの接続**: 1-7 の `post_to_dict` を宣言に置き換える
+
+### 8-0. このステップの初出
+
+**Django / Ninja**: OpenAPI の自動生成, `response=` / **Python**: `return 201, post`（組で返す）
+
+> 🧒 **かみくだくと**: **OpenAPI** は API の説明書の決まった書き方。**Swagger UI** はそれを画面にし、ブラウザから試せる道具。
+
+### 8-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`config/api.py`（全文）
+
+```python
+from datetime import datetime
+
+from django.http import HttpRequest
+from ninja import Field, NinjaAPI, Schema
+
+from blog.models import Post
+
+api = NinjaAPI()
+
+
+class PostIn(Schema):
+    # 受け取る書式（入力）
+    title: str = Field(max_length=200)
+    body: str
+
+
+class PostOut(Schema):
+    # 返す書式（出力）。ここに無い項目は返さない
+    id: int
+    title: str
+    body: str
+    created_at: datetime
+
+
+@api.get("/posts", response=list[PostOut])
+def list_posts(request: HttpRequest):  # 戻り値の形は response= で宣言する
+    return Post.objects.all()
+
+
+@api.post("/posts", response={201: PostOut})
+def create_post(request: HttpRequest, payload: PostIn):
+    post = Post.objects.create(title=payload.title, body=payload.body)
+    return 201, post  # (ステータス, 中身) の組で返す
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過）
+
+ブラウザで `http://127.0.0.1:8000/api/docs` を開き、**POST /api/posts → Try it out** で JSON を書いて **Execute** を押します。
+
+```text
+Server response
+Code: 201
+Response body:
+{
+  "id": 2,
+  "title": "Swagger UI から",
+  "body": "b",
+  "created_at": "2026-10-08T12:56:22.547Z"
+}
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ブラウザで実際に操作した結果）
+
+説明書の中身は `/api/openapi.json` にあります（抜粋）。
+
+```json
+"PostIn": {
+  "properties": {
+    "title": {"maxLength": 200, "title": "Title", "type": "string"},
+    "body": {"title": "Body", "type": "string"}
+  },
+  "required": ["title", "body"]
+}
+```
+
+✅ 検証済み: django-ninja 1.7.1（OpenAPI 3.1.0。`POST /api/posts` の応答は `201` と記載される）
+
+> ✅ **回収（1-7）**: 出力の書式を `{201: PostOut}` と宣言したので、作成が 201 になった。
+
+### 8-2. 🔬 仕組み解剖
+
+| | OpenAPI の自動生成 | `response=` |
+| --- | --- | --- |
+| 正式名称 | OpenAPI 3.1 の説明書と Swagger UI | 出力スキーマの宣言 |
+| いつ・誰が | `openapi.json` を開いたとき、登録済みの関数と `Schema` から組み立てる | 関数が返したあと、`PostOut` の形に整える |
+| TS での対応物 | 対応物なし。TS の型は実行時に消える | 同左 |
+| なぜこの設計 | コードと説明書がずれない | 返す項目を宣言で決められる |
+| 失敗すると | — | 形が合わないと 500（`ValidationError`） |
+
+```text
+config/api.py の宣言（PostIn / PostOut / @api.post）
+  ├→ リクエスト時: PostIn で検査 → 関数 → PostOut で整形
+  └→ /api/openapi.json: 同じ宣言から説明書を作る → /api/docs が画面にする
+```
+
+✅ 検証済み: django-ninja 1.7.1
+
+見てほしいのは、**1つの宣言が検査と説明書の両方になる**ことです。
+
+### 8-3. 🐍 Python注
+
+> 🐍 `return 201, post` は2つの値を組（タプル）で返す。TS の `return [201, post]` に近い。
+> 🐍 `list[PostOut]` は「`PostOut` のリスト」という型。TS の `PostOut[]`。
+
+### 8-4. 解説 — なぜこう設計するか
+
+関数は `Post` をそのまま返し、出す項目は `PostOut` が決めます。
+
+🧠 Django の考え方: 台帳の形（モデル）と窓口で見せる形（スキーマ）を分ける。
+
+### 8-5. 🔓 教材用の簡略化
+
+> 🔓 **教材用の簡略化**: `/api/docs` を誰でも見られる状態にしている。
+> **本番では**: `NinjaAPI(docs_decorator=staff_member_required)` などで、見られる人を絞る。
+> 根拠: https://django-ninja.dev/guide/openapi/#protecting-the-docs
+
+### 8-6. 🔮 予測 → 動作確認
+
+1. モデルにある `updated_at` は、一覧の応答に入る？
+2. `list_posts` が `[{"id": 1, "title": "t"}]` を返したら？（試したら戻す）
+
+<details><summary>答え</summary>
+
+1. 入らない。`PostOut` に無いから
+2. 500。ログに `ValidationError`（`Field required` が2つ）
+
+</details>
+
+### 8-7. ✅ 想起チェック
+
+1. `response={201: PostOut}` の使い道を2つ挙げると？
+
+<details><summary>答え</summary>
+
+1. 応答を整えること。説明書に書かれること
+
+</details>
+
+### 8-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **入出力を宣言すれば、検査も説明書も Ninja が作る。**
+
+📒 用語集に追記: OpenAPI / Swagger UI / タプル
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ9` — 1件取得
