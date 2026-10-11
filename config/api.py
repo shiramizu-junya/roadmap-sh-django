@@ -55,3 +55,10 @@ def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
         setattr(post, name, value)  # post.title = value と同じ
     post.save()
     return post
+
+
+@api.delete("/posts/{post_id}", response={204: None})
+def delete_post(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    post.delete()
+    return 204, None  # 204 は「成功。返す中身は無い」
