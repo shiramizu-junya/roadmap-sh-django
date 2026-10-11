@@ -46,3 +46,6 @@
 | Router | `ninja.Router` | 窓口の「部署」。アプリごとの API 一式をまとめ、`add_router` で本庁（`NinjaAPI`）に差し込む | 第2部-1 |
 | pre-commit | pre-commit | コミットの直前に、ruff や mypy などの検査を自動で走らせる道具 | 第2部-1 |
 | .env.example | — | `.env` の見本。秘密の値は入れず、Git に入れて共有する | 第2部-1 |
+| 多対一 | many-to-one | 「記事は1つのカテゴリに属し、カテゴリには多くの記事」の関係。`ForeignKey` で表す | 第2部-2 |
+| 外部キー | foreign key | 別の台帳の `id` を書いておく列（例: `category_id`）。無い `id` は DB が拒否する | 第2部-2 |
+| on_delete | `on_delete` | 参照先が消されるときの決まり（`PROTECT` / `CASCADE` / `SET_NULL` など）。Django が実行する | 第2部-2 |
