@@ -1748,3 +1748,181 @@ COMMIT
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ12` — テストで固定する
+
+---
+
+## 第1部-12: テストで固定する
+
+**❓ この回の問い**: CRUD がそろった。直すたびに curl で全部確かめずに済むには？
+
+**作るもの**: CRUD の動きを確かめる pytest が4件通る
+**重要度**: 🔴 毎日使う — 機能を足すたびにテストも足す
+**前ステップとの接続**: 1-7〜1-11 の curl の確認をテストにする
+
+### 12-0. このステップの初出
+
+**Django / Ninja**: `pytest.mark.django_db`, Ninja の `TestClient` / **Python**: `assert`, f 文字列
+
+> 🧒 **かみくだくと**: **テスト用 DB** は、テスト専用の別の台帳（`test_blog`）。終わると消え、本物の `blog` には触らない。
+
+### 12-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+前提: 1-8・1-11 を `Status(...)` で書いていること。
+
+```bash
+uv add --dev pytest pytest-django
+
+# django ユーザーに、テスト用 DB（test_blog）を作る権限を付ける（最初の1回だけ）
+docker compose exec db mysql -uroot -prootpass \
+  -e "GRANT ALL PRIVILEGES ON \`test_blog\`.* TO 'django'@'%';"
+```
+
+`pyproject.toml`（末尾に追記）
+
+```toml
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+```
+
+`tests/test_posts_api.py`（新規・全文）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from blog.models import Post
+from config.api import api
+
+# Ninja の API を、サーバを起動せずに直接呼ぶためのクライアント
+client = TestClient(api)
+
+
+@pytest.mark.django_db  # このテストは DB を使う（テスト用 DB が作られる）
+def test_create_and_get_post() -> None:
+    res = client.post("/posts", json={"title": "テスト", "body": "本文"})
+    assert res.status_code == 201
+    post_id = res.json()["id"]
+
+    res = client.get(f"/posts/{post_id}")
+    assert res.status_code == 200
+    assert res.json()["title"] == "テスト"
+
+
+@pytest.mark.django_db
+def test_create_rejects_long_title() -> None:
+    res = client.post("/posts", json={"title": "a" * 201, "body": "本文"})
+    assert res.status_code == 422
+    assert Post.objects.count() == 0  # 保存されていない
+
+
+@pytest.mark.django_db
+def test_update_changes_only_sent_fields() -> None:
+    post = Post.objects.create(title="元の題名", body="元の本文")
+
+    res = client.patch(f"/posts/{post.id}", json={"title": "新しい題名"})
+    assert res.status_code == 200
+
+    saved = Post.objects.get(id=post.id)  # DB から読み直す
+    assert saved.title == "新しい題名"
+    assert saved.body == "元の本文"  # 送らなかった項目は変わらない
+
+
+@pytest.mark.django_db
+def test_delete_then_404() -> None:
+    post = Post.objects.create(title="消す", body="本文")
+
+    assert client.delete(f"/posts/{post.id}").status_code == 204
+    assert client.get(f"/posts/{post.id}").status_code == 404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / pytest 9.1.1 / pytest-django 4.14.0（ruff・mypy も通過）
+
+```bash
+uv run pytest -v
+```
+
+```text
+tests/test_posts_api.py::test_create_and_get_post PASSED                 [ 25%]
+tests/test_posts_api.py::test_create_rejects_long_title PASSED           [ 50%]
+tests/test_posts_api.py::test_update_changes_only_sent_fields PASSED     [ 75%]
+tests/test_posts_api.py::test_delete_then_404 PASSED                     [100%]
+4 passed
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（実行後、MySQL に `test_blog` は残らない）
+
+### 12-2. 🔬 仕組み解剖
+
+| | `pytest.mark.django_db` | `TestClient` |
+| --- | --- | --- |
+| 正式名称 | pytest-django のマーク | `ninja.testing.TestClient` |
+| いつ・誰が | `test_blog` を作り、テストごとに変更を取り消し、最後に消す | サーバを起動せず Ninja の関数を直接呼ぶ |
+| TS での対応物 | 対応物なし | supertest の `request(app)` に近い |
+| なぜこの設計 | 本物を汚さず、テスト同士も影響しない | 速く、Ninja の部分だけ確かめられる |
+| 失敗すると | マークが無いと `RuntimeError: Database access not allowed` | URL は `/posts`（`/api` は付けない） |
+
+```text
+uv run pytest
+  └→ test_blog を作る（migrate も流す）
+       ├→ テスト1: 作る → 確かめる → 取り消し
+       ├→ テスト2: 作る → 確かめる → 取り消し
+       └→ …
+  └→ test_blog を消す
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+見てほしいのは、**テストごとに台帳が戻る**点。
+
+### 12-3. 🐍 Python注
+
+> 🐍 `assert 条件` は、条件が偽ならテストを失敗させる。
+> 🐍 `f"/posts/{post_id}"` は f 文字列。TS の `` `/posts/${postId}` `` と同じ。
+
+### 12-4. 解説 — なぜこう設計するか
+
+`TestClient` は `urls.py` やミドルウェアを通らず、Ninja の部分だけを速く確かめます。
+根拠: https://django-ninja.dev/guide/testing/
+
+🧠 Django の考え方: テストは本物と同じ種類の DB で、毎回まっさらから動かす。
+
+### 12-5. 🔮 予測 → 動作確認
+
+1. GRANT の前に `uv run pytest` を流すと？
+2. ほかのテストが記事を作っても、`count() == 0` は通る？
+3. 最初のテストから `@pytest.mark.django_db` を消すと？（試したら戻す）
+
+<details><summary>答え</summary>
+
+1. `Access denied ... to database 'test_blog'`（検証済み）
+2. 通る。テストごとに変更が取り消されるから
+3. `RuntimeError: Database access not allowed ...`（検証済み）
+
+</details>
+
+### 12-6. ✅ 想起チェック
+
+1. テストで作った記事が、本物の `blog` に残らないのはなぜ？
+
+<details><summary>答え</summary>
+
+1. 別の台帳 `test_blog` を使い、取り消してから消すから
+
+</details>
+
+### 12-7. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`django_db` を付けたテストは、使い捨てのテスト用 DB で動く。**
+
+📒 用語集に追記: pytest / テスト用 DB / assert
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+> 第1部の本編はここまで。分からない箇所は `# TODO: わからん` の印だけ見返せば十分です。
+
+▶ **次**: `M2: 第1部` — 白紙再現と宿題（第1部のまとめ）
