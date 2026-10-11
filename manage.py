@@ -15,8 +15,11 @@ def start_debugpy_if_requested() -> None:
         return
     import debugpy
 
-    debugpy.listen(("127.0.0.1", 5678))
-    print("debugpy: 127.0.0.1:5678 で接続を待っています", file=sys.stderr)
+    port = int(os.environ.get("DEBUGPY_PORT", "5678"))
+    # in_process_debug_adapter=True: 接続を受ける部品をこのプロセスの中で動かす。
+    # 既定（別プロセス）だと、保存で再起動したときに古い部品がポートを握ったまま残る
+    debugpy.listen(("127.0.0.1", port), in_process_debug_adapter=True)
+    print(f"debugpy: 127.0.0.1:{port} で接続を待っています", file=sys.stderr)
 
 
 def main():
