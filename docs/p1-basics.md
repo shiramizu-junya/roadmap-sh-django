@@ -1926,3 +1926,407 @@ uv run pytest
 > 第1部の本編はここまで。分からない箇所は `# TODO: わからん` の印だけ見返せば十分です。
 
 ▶ **次**: `M2: 第1部` — 白紙再現と宿題（第1部のまとめ）
+
+---
+
+## 第1部のまとめ（M2）— 白紙再現と宿題
+
+ここまでで、記事の CRUD API が1本できました。最後に、**思い出して書く練習**をして定着させます。
+
+> ✍️ **翌日にやってください。** 書いた直後だと、短い記憶だけで書けてしまい、練習になりません。
+
+### 1. 白紙再現（3段階から選ぶ）
+
+| 段階 | やること | 判定 |
+| --- | --- | --- |
+| **Lv1 穴埋め** | 下のコードの `____` を埋める | `uv run pytest` が `4 passed` |
+| **Lv2 ファイル単位** | `config/api.py` を閉じ、白紙から書き直す | `uv run pytest` が `4 passed`、ruff・mypy も通る |
+| **Lv3 構成から** | 要件だけを見て、どのファイルに何を書くかから組み立てる | 同上 |
+
+> ✍️ まず Lv1 から。できたら次回 Lv2 に上げる。
+> 思い出せなかった箇所に印を付け、**その箇所の 🔬 仕組み解剖だけ**読み返してください。
+
+#### Lv1 穴埋め
+
+`config/api.py` を別名で退避（例: `cp config/api.py /tmp/api.py.bak`）してから、次のコードを貼って `____` を埋めます。
+
+```python
+from datetime import datetime
+
+from django.http import HttpRequest
+from django.shortcuts import ____①____
+from ninja import Field, NinjaAPI, Schema, Status
+
+from blog.models import Post
+
+api = ____②____()
+
+
+class PostIn(____③____):
+    title: str = Field(____④____=200)
+    body: str
+
+
+class PostPatch(Schema):
+    title: str | None = Field(default=None, max_length=200)
+    body: str | None = None
+
+
+class PostOut(Schema):
+    id: int
+    title: str
+    body: str
+    created_at: datetime
+
+
+@api.get("/posts", response=____⑤____)
+def list_posts(request: HttpRequest):
+    return Post.objects.____⑥____()
+
+
+@api.post("/posts", response={____⑦____: PostOut})
+def create_post(request: HttpRequest, payload: PostIn):
+    post = Post.objects.____⑧____(title=payload.title, body=payload.body)
+    return Status(201, post)
+
+
+@api.get("/posts/{____⑨____}", response=PostOut)
+def get_post(request: HttpRequest, post_id: int):
+    return get_object_or_404(Post, id=post_id)
+
+
+@api.patch("/posts/{post_id}", response=PostOut)
+def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
+    post = get_object_or_404(Post, id=post_id)
+    changes = payload.model_dump(____⑩____=True, exclude_none=True)
+    for name, value in changes.items():
+        setattr(post, name, value)
+    post.____⑪____()
+    return post
+
+
+@api.delete("/posts/{post_id}", response={204: ____⑫____})
+def delete_post(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    post.delete()
+    return Status(204, None)
+```
+
+⚠️ 未実行（穴埋め用のため、このままでは動かない。検証手順: 埋めたあと `uv run pytest`）
+
+<details><summary>答え</summary>
+
+① `get_object_or_404`（1-9）
+② `NinjaAPI`（1-7）
+③ `Schema`（1-7）
+④ `max_length`（1-7）
+⑤ `list[PostOut]`（1-8）
+⑥ `all`（1-5）
+⑦ `201`（1-8）
+⑧ `create`（1-6）
+⑨ `post_id`（1-9）
+⑩ `exclude_unset`（1-10）
+⑪ `save`（1-10）
+⑫ `None`（1-11）
+
+埋めた全体は、第1部-11 までのコードと同じです（第1部-12 のテスト4件が通ることを確認済み）。
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（`4 passed`）
+
+</details>
+
+終わったら、退避したファイルを戻してください（`cp /tmp/api.py.bak config/api.py`）。
+
+#### Lv3 の要件
+
+- MySQL に記事（タイトル最大200文字・本文・作成日時・更新日時）を保存する
+- `/api/posts` で一覧・作成（201）、`/api/posts/{id}` で取得・部分更新・削除（204）
+- 無い id は 404、書式の誤りは 422
+- `/api/docs` で試せる。テスト4件（1-12）が通る
+
+### 2. 宿題
+
+**宿題はブランチを切ってやってください。** 第2部は、第1部の終わりの状態から始まるためです。
+
+```bash
+git switch -c homework-p1   # 宿題用のブランチを作って移る
+# … 宿題をやる …
+git switch main             # 終わったら main に戻る
+```
+
+⚠️ 未実行（Git の操作のため。検証手順: `git branch` で今いるブランチを確認）
+
+#### Lv1 基礎確認 — 応答に `updated_at` を足す
+
+**課題**: 一覧・取得・作成・更新の応答に `updated_at` も含める。
+
+**ヒント**: 返す項目を決めているのはどこか（1-8）。
+
+**判定基準**:
+- `curl -s http://127.0.0.1:8000/api/posts/1` の応答に `"updated_at"` がある
+- 下の解答例のテストが通る（更新すると `updated_at` は進み、`created_at` は変わらない）
+
+<details><summary>解答例</summary>
+
+`config/api.py`（差分）
+
+```python
+class PostOut(Schema):
+    id: int
+    title: str
+    body: str
+    created_at: datetime
+    updated_at: datetime  # 追加: 最後に更新した時刻
+```
+
+`tests/test_homework_lv1.py`（新規）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_updated_at_moves_on_patch() -> None:
+    created = client.post("/posts", json={"title": "元", "body": "本文"}).json()
+    assert "updated_at" in created
+
+    updated = client.patch(f"/posts/{created['id']}", json={"title": "新"}).json()
+    assert updated["updated_at"] > created["updated_at"]  # 更新で時刻が進む
+    assert updated["created_at"] == created["created_at"]  # 作成時刻は変わらない
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（`5 passed`。ruff・mypy も通過）
+
+</details>
+
+#### Lv2 応用 — お知らせ（Notice）の API を自力で組む
+
+**課題**: 記事とは別に「お知らせ」を作る。項目は `title`（最大100文字）・`message`・`created_at`。
+`GET /api/notices`（一覧）、`POST /api/notices`（作成、201）、`GET /api/notices/{notice_id}`（取得）を作り、管理画面にも出す。
+
+**ヒント**: 第1部の順番そのまま。モデル → マイグレーション → 管理画面 → スキーマ → 関数 → テスト。
+
+**判定基準**:
+- `uv run python manage.py makemigrations` が `+ Create model Notice` を出す
+- 管理画面に「Notices」が出る
+- 101文字のタイトルは 422、無い id は 404
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`blog/models.py`（末尾に追加）
+
+```python
+class Notice(models.Model):
+    # お知らせ（宿題 Lv2）
+    title = models.CharField(max_length=100)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.title
+```
+
+`blog/admin.py`（全文）
+
+```python
+from django.contrib import admin
+
+from .models import Notice, Post
+
+# Post と Notice を管理画面に出す（見た目の調整はしない）
+admin.site.register(Post)
+admin.site.register(Notice)
+```
+
+`config/api.py`（差分。import を変え、末尾に追加）
+
+```python
+from blog.models import Notice, Post
+
+# （中略）
+
+
+class NoticeIn(Schema):
+    title: str = Field(max_length=100)
+    message: str
+
+
+class NoticeOut(Schema):
+    id: int
+    title: str
+    message: str
+    created_at: datetime
+
+
+@api.get("/notices", response=list[NoticeOut])
+def list_notices(request: HttpRequest):
+    return Notice.objects.all()
+
+
+@api.post("/notices", response={201: NoticeOut})
+def create_notice(request: HttpRequest, payload: NoticeIn):
+    notice = Notice.objects.create(title=payload.title, message=payload.message)
+    return Status(201, notice)
+
+
+@api.get("/notices/{notice_id}", response=NoticeOut)
+def get_notice(request: HttpRequest, notice_id: int):
+    return get_object_or_404(Notice, id=notice_id)
+```
+
+`tests/test_notices_api.py`（新規）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_create_list_and_get_notice() -> None:
+    res = client.post("/notices", json={"title": "メンテナンス", "message": "夜に止めます"})
+    assert res.status_code == 201
+    notice_id = res.json()["id"]
+
+    assert [n["title"] for n in client.get("/notices").json()] == ["メンテナンス"]
+    assert client.get(f"/notices/{notice_id}").json()["message"] == "夜に止めます"
+
+
+@pytest.mark.django_db
+def test_notice_title_over_100_is_rejected() -> None:
+    res = client.post("/notices", json={"title": "a" * 101, "message": "m"})
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_missing_notice_is_404() -> None:
+    assert client.get("/notices/999").status_code == 404
+```
+
+```bash
+uv run python manage.py makemigrations
+uv run python manage.py migrate
+uv run pytest -q
+```
+
+```text
+Migrations for 'blog':
+  blog/migrations/0002_notice.py
+    + Create model Notice
+（中略）
+7 passed
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過。作られる表は `CREATE TABLE blog_notice (...)`）
+
+</details>
+
+#### Lv3 発展 — 同じタイトルの記事を作れないようにする
+
+**課題**: 同じタイトルの記事を作ろうとしたら、409 と `{"detail": "同じタイトルの記事がすでにあります"}` を返す。DB 側でも重複を拒否する。
+
+**ヒント**:
+- DB で重複を拒否するのは、フィールドの引数（1-3 の `max_length` の仲間）。
+- 宣言に無いステータスは返せない（1-7）。`response=` に 409 用の書式を足す。
+- DB の拒否だけに頼ると、何が返るか確かめてみる。
+
+**判定基準**:
+- `makemigrations` が `~ Alter field title on post` を出し、`sqlmigrate` に `UNIQUE` が入る
+- 同じタイトルで2回 POST すると、2回目が 409。記事は1件のまま
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`blog/models.py`（差分）
+
+```python
+    title = models.CharField(max_length=200, unique=True)  # 同じタイトルは DB が拒否する
+```
+
+`config/api.py`（差分）
+
+```python
+class ErrorOut(Schema):
+    # エラーのときに返す書式
+    detail: str
+
+
+# （中略）
+
+
+@api.post("/posts", response={201: PostOut, 409: ErrorOut})
+def create_post(request: HttpRequest, payload: PostIn):
+    # 先に確かめて、分かりやすい 409 を返す（最後の砦は DB の unique）
+    if Post.objects.filter(title=payload.title).exists():
+        return Status(409, {"detail": "同じタイトルの記事がすでにあります"})
+    post = Post.objects.create(title=payload.title, body=payload.body)
+    return Status(201, post)  # ステータスと中身を一緒に返す
+```
+
+`tests/test_homework_lv3.py`（新規）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from blog.models import Post
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_duplicate_title_is_409() -> None:
+    assert client.post("/posts", json={"title": "同じ", "body": "1"}).status_code == 201
+
+    res = client.post("/posts", json={"title": "同じ", "body": "2"})
+    assert res.status_code == 409
+    assert res.json() == {"detail": "同じタイトルの記事がすでにあります"}
+    assert Post.objects.count() == 1  # 2件目は保存されていない
+```
+
+```sql
+-- sqlmigrate blog 0002 の出力
+ALTER TABLE `blog_post` ADD CONSTRAINT `blog_post_title_adf2f203_uniq` UNIQUE (`title`);
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（`5 passed`。ruff・mypy も通過）
+
+`exists()` の確認を外すと、DB が `IntegrityError (1062, "Duplicate entry '同じ' ...")` で拒否し、500 になります（検証済み）。
+**DB の制約は「最後の砦」、`exists()` は「分かりやすいエラーを返すため」**と役割が違います。
+なお、`exists()` と保存の間に別の人が同じタイトルで保存すると、すり抜けて 500 になります。この「同時に来たら？」は第3部で扱います。
+
+</details>
+
+### 3. 第1部の終わりに
+
+**ここまでで、できるようになったこと**
+- `settings.py` と `urls.py` で、プロジェクトの土台を読める・直せる
+- モデルを書き、マイグレーションで MySQL のテーブルにできる（出る SQL も読める）
+- `JsonResponse` で API を手書きでき、Ninja が何を肩代わりしているかを説明できる
+- Ninja で CRUD を書き、Swagger UI で試し、pytest で動きを固定できる
+
+**ここで止めても成果物になります。** 手元には「MySQL に保存し、Swagger UI から操作でき、テストが通る API」が1本あります。
+
+**第2部で増えるもの**
+- カテゴリ・タグ・コメントなどの**リレーション**と、それに伴う **N+1 問題**
+- **JWT ログイン**と、「自分の記事だけ変えられる」**権限**
+- 画像・検索・ページング・メール・ソフトデリート
+
+第2部に進むかどうかは、ここで決めてください。
+分からないまま残った箇所は、`# TODO: わからん` の印だけ見返せば十分です。
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ1` — API をアプリごとに分ける ／ または `MP: url-shortening-service`
