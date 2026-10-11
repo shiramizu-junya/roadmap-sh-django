@@ -13,18 +13,24 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# .env の中身を環境変数として読み込む（同じ名前の環境変数がすでにあれば、そちらを優先）
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-d3@=z0m$w8lld8+1spho!49f$1j+fmp9vv0454$kk(^(k5qyzz"
+# 秘密鍵は .env から読む。無ければ KeyError で起動を止める
+SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 
 # このサーバが受け付けるホスト名
 ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
@@ -79,11 +85,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",  # mysqlclient を使う
-        "NAME": "blog",
-        "USER": "django",
-        "PASSWORD": "django",
-        "HOST": "127.0.0.1",
-        "PORT": "3307",  # compose.yaml で公開したポート
+        "NAME": os.environ["DB_NAME"],
+        "USER": os.environ["DB_USER"],
+        "PASSWORD": os.environ["DB_PASSWORD"],
+        "HOST": os.environ["DB_HOST"],
+        "PORT": os.environ["DB_PORT"],  # compose.yaml で公開したポート
         "OPTIONS": {"charset": "utf8mb4"},  # 絵文字も保存できる文字コード
     }
 }

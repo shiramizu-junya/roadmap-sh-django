@@ -6,6 +6,7 @@ dependencies = [
     "django>=5.2,<6.0",
     "django-ninja>=1.7.1",
     "mysqlclient>=2.3.0",
+    "python-dotenv>=1.2.4",
 ]
 [tool.uv.extra-build-variables]
 mysqlclient = { PKG_CONFIG_PATH = "/opt/homebrew/opt/mysql-client/lib/pkgconfig" }
@@ -14,6 +15,7 @@ mysqlclient = { PKG_CONFIG_PATH = "/opt/homebrew/opt/mysql-client/lib/pkgconfig"
 dev = [
     "debugpy>=1.8.22",
     "django-stubs[compatible-mypy]>=5.2,<6.0",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
     "ruff>=0.16.10",
