@@ -33,7 +33,7 @@
 | スキーマ | schema（`ninja.Schema`） | 申請書の書式。何を・どの型で・どんな条件で受け取るかの宣言 | 第1部-7 |
 | OpenAPI | OpenAPI Specification | API の説明書の決まった書き方（中身は JSON）。Ninja が宣言から自動で作る | 第1部-8 |
 | Swagger UI | Swagger UI | OpenAPI の説明書を画面にし、ブラウザから API を試せる道具。`/api/docs` | 第1部-8 |
-| タプル | tuple | 複数の値をひと組にしたもの。`return 201, post` は2つの値の組を返す | 第1部-8 |
+| Status | `ninja.Status` | ステータスと中身を一緒に返すための入れ物。`Status(201, post)` のように使う | 第1部-8 |
 | パスパラメータ | path parameter（`{post_id}`） | URL の一部を値として受け取る仕組み。`/posts/3` の `3` を引数にする | 第1部-9 |
 | 404 | 404 Not Found | 「探したものが無い」を表すステータス。`get_object_or_404` が無いときに返す | 第1部-9 |
 | PATCH | HTTP PATCH | 一部だけ変える HTTP メソッド。送った項目だけを更新する | 第1部-10 |

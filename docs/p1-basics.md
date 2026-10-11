@@ -1175,12 +1175,12 @@ POST /api/posts（窓口に来た人）
 **❓ この回の問い**: 1-7 は入力だけ宣言した。出力も宣言すると何が手に入るのか？
 
 **作るもの**: `PostOut` を宣言して作成を 201 にし、`/api/docs` から試す
-**重要度**: 🔴 毎日使う — 以降の API は入出力を必ず宣言する
+**重要度**: 🔴 毎日使う — 以降の API は入出力を宣言する
 **前ステップとの接続**: 1-7 の `post_to_dict` を宣言に置き換える
 
 ### 8-0. このステップの初出
 
-**Django / Ninja**: OpenAPI の自動生成, `response=` / **Python**: `return 201, post`（組で返す）
+**Django / Ninja**: OpenAPI の自動生成, `response=`（`Status` で返す） / **Python**: `list[...]`
 
 > 🧒 **かみくだくと**: **OpenAPI** は API の説明書の決まった書き方。**Swagger UI** はそれを画面にし、ブラウザから試せる道具。
 
@@ -1195,7 +1195,7 @@ POST /api/posts（窓口に来た人）
 from datetime import datetime
 
 from django.http import HttpRequest
-from ninja import Field, NinjaAPI, Schema
+from ninja import Field, NinjaAPI, Schema, Status
 
 from blog.models import Post
 
@@ -1224,12 +1224,12 @@ def list_posts(request: HttpRequest):  # 戻り値の形は response= で宣言�
 @api.post("/posts", response={201: PostOut})
 def create_post(request: HttpRequest, payload: PostIn):
     post = Post.objects.create(title=payload.title, body=payload.body)
-    return 201, post  # (ステータス, 中身) の組で返す
+    return Status(201, post)  # ステータスと中身を一緒に返す
 ```
 
 ✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過）
 
-ブラウザで `http://127.0.0.1:8000/api/docs` を開き、**POST /api/posts → Try it out** で JSON を書いて **Execute** を押します。
+`http://127.0.0.1:8000/api/docs` を開き、**POST /api/posts → Try it out** に JSON を書いて **Execute** を押します。
 
 ```text
 Server response
@@ -1245,7 +1245,7 @@ Response body:
 
 ✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ブラウザで実際に操作した結果）
 
-説明書の中身は `/api/openapi.json` にあります（抜粋）。
+説明書は `/api/openapi.json` にあります。
 
 ```json
 "PostIn": {
@@ -1259,16 +1259,19 @@ Response body:
 
 ✅ 検証済み: django-ninja 1.7.1（OpenAPI 3.1.0。`POST /api/posts` の応答は `201` と記載される）
 
-> ✅ **回収（1-7）**: 出力の書式を `{201: PostOut}` と宣言したので、作成が 201 になった。
+> ✅ **回収（1-7）**: 出力を `{201: PostOut}` と宣言したので、作成が 201 になった。
+
+> 💡補足: 古い資料の `return 201, post` は非推奨。
+> 根拠: https://django-ninja.dev/guide/responses/
 
 ### 8-2. 🔬 仕組み解剖
 
 | | OpenAPI の自動生成 | `response=` |
 | --- | --- | --- |
 | 正式名称 | OpenAPI 3.1 の説明書と Swagger UI | 出力スキーマの宣言 |
-| いつ・誰が | `openapi.json` を開いたとき、登録済みの関数と `Schema` から組み立てる | 関数が返したあと、`PostOut` の形に整える |
+| いつ・誰が | `openapi.json` を開いたとき、関数と `Schema` から組み立てる | 関数が返したあと、`PostOut` の形に整える |
 | TS での対応物 | 対応物なし。TS の型は実行時に消える | 同左 |
-| なぜこの設計 | コードと説明書がずれない | 返す項目を宣言で決められる |
+| なぜこの設計 | コードと説明書がずれない | 返す項目を宣言で決める |
 | 失敗すると | — | 形が合わないと 500（`ValidationError`） |
 
 ```text
@@ -1279,16 +1282,16 @@ config/api.py の宣言（PostIn / PostOut / @api.post）
 
 ✅ 検証済み: django-ninja 1.7.1
 
-見てほしいのは、**1つの宣言が検査と説明書の両方になる**ことです。
+見てほしいのは、**1つの宣言が検査にも説明書にもなる**点です。
 
 ### 8-3. 🐍 Python注
 
-> 🐍 `return 201, post` は2つの値を組（タプル）で返す。TS の `return [201, post]` に近い。
+> 🐍 `Status(201, post)` は TS の `new Status(201, post)`。Python は `new` を書かない。
 > 🐍 `list[PostOut]` は「`PostOut` のリスト」という型。TS の `PostOut[]`。
 
 ### 8-4. 解説 — なぜこう設計するか
 
-関数は `Post` をそのまま返し、出す項目は `PostOut` が決めます。
+関数は `Post` を返し、出す項目は `PostOut` が決めます。
 
 🧠 Django の考え方: 台帳の形（モデル）と窓口で見せる形（スキーマ）を分ける。
 
@@ -1301,11 +1304,11 @@ config/api.py の宣言（PostIn / PostOut / @api.post）
 ### 8-6. 🔮 予測 → 動作確認
 
 1. モデルにある `updated_at` は、一覧の応答に入る？
-2. `list_posts` が `[{"id": 1, "title": "t"}]` を返したら？（試したら戻す）
+2. `list_posts` が `[{"id": 1, "title": "t"}]` を返したら？
 
 <details><summary>答え</summary>
 
-1. 入らない。`PostOut` に無いから
+1. 入らない（`PostOut` に無い）
 2. 500。ログに `ValidationError`（`Field required` が2つ）
 
 </details>
@@ -1324,7 +1327,7 @@ config/api.py の宣言（PostIn / PostOut / @api.post）
 
 この回で覚えることは1つだけ: **入出力を宣言すれば、検査も説明書も Ninja が作る。**
 
-📒 用語集に追記: OpenAPI / Swagger UI / タプル
+📒 用語集に追記: OpenAPI / Swagger UI / Status
 
 ---
 ❓ 分からない言葉があれば `?: <言葉>` と送ってください。
@@ -1638,7 +1641,7 @@ UPDATE `blog_post` SET `title` = 'u', `updated_at` = '2026-10-11 11:21:01.202272
 def delete_post(request: HttpRequest, post_id: int):
     post = get_object_or_404(Post, id=post_id)
     post.delete()
-    return 204, None  # 204 は「成功。返す中身は無い」
+    return Status(204, None)  # 204 は「成功。返す中身は無い」
 ```
 
 ✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1（ruff・mypy も通過）
@@ -1672,7 +1675,7 @@ DELETE FROM `blog_post` WHERE `blog_post`.`id` IN (1)
 | | `delete()` | `response={204: None}` |
 | --- | --- | --- |
 | 正式名称 | `Model.delete()` | 中身の無い応答の宣言 |
-| いつ・誰が | 呼んだ瞬間に `DELETE` を出す。戻り値は `(1, {'blog.Post': 1})`（消えた件数） | 関数が `204, None` を返したとき、Ninja が本文の無い応答にする |
+| いつ・誰が | 呼んだ瞬間に `DELETE` を出す。戻り値は `(1, {'blog.Post': 1})`（消えた件数） | 関数が `Status(204, None)` を返すと、Ninja が本文の無い応答にする |
 | TS での対応物 | 対応物なし（ORM の機能） | Express の `res.status(204).end()` |
 | なぜこの設計 | 関連するデータも、まとめて消せる作りになっている（第2部で見る） | 「消えたものは返せない」を宣言で表す |
 | 失敗すると | — | 宣言に無いステータスを返すと 500（1-7 で見た） |
@@ -1681,7 +1684,7 @@ DELETE FROM `blog_post` WHERE `blog_post`.`id` IN (1)
 DELETE /api/posts/1
   └→ get_object_or_404 … SELECT。無ければ 404
        └→ post.delete() … DELETE
-            └→ return 204, None → 本文なしの 204
+            └→ return Status(204, None) → 本文なしの 204
 ```
 
 ✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
