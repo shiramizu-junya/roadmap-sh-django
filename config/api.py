@@ -2,7 +2,7 @@ from datetime import datetime
 
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
-from ninja import Field, NinjaAPI, Schema
+from ninja import Field, NinjaAPI, Schema, Status
 
 from blog.models import Post
 
@@ -37,7 +37,7 @@ def list_posts(request: HttpRequest):  # 戻り値の形は response= で宣言�
 @api.post("/posts", response={201: PostOut})
 def create_post(request: HttpRequest, payload: PostIn):
     post = Post.objects.create(title=payload.title, body=payload.body)
-    return 201, post  # (ステータス, 中身) の組で返す
+    return Status(201, post)  # (ステータス, 中身) の組で返す
 
 
 @api.get("/posts/{post_id}", response=PostOut)
@@ -61,4 +61,4 @@ def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
 def delete_post(request: HttpRequest, post_id: int):
     post = get_object_or_404(Post, id=post_id)
     post.delete()
-    return 204, None  # 204 は「成功。返す中身は無い」
+    return Status(204, None)  # 204 は「成功。返す中身は無い」
