@@ -43,3 +43,6 @@
 | pytest | pytest | Python のテストを動かす道具。`test_` で始まる関数を探して実行する | 第1部-12 |
 | テスト用 DB | test database（`test_blog`） | テスト専用の別の台帳。テストごとに変更を取り消し、終わると消える | 第1部-12 |
 | assert | `assert` 文 | 条件が偽ならテストを失敗させる文 | 第1部-12 |
+| Router | `ninja.Router` | 窓口の「部署」。アプリごとの API 一式をまとめ、`add_router` で本庁（`NinjaAPI`）に差し込む | 第2部-1 |
+| pre-commit | pre-commit | コミットの直前に、ruff や mypy などの検査を自動で走らせる道具 | 第2部-1 |
+| .env.example | — | `.env` の見本。秘密の値は入れず、Git に入れて共有する | 第2部-1 |
