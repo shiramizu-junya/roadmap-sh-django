@@ -1464,3 +1464,148 @@ SQL の `LIMIT 21` は、1件のはずが複数あったときに気づくため
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ10` — 更新
+
+---
+
+## 第1部-10: 更新
+
+**❓ この回の問い**: 1件を指せた。その「送った項目だけ」を変えるには？
+
+**作るもの**: `PATCH /api/posts/{post_id}` で、送った項目だけを変える
+**重要度**: 🔴 毎日使う — 更新 API の基本形
+**前ステップとの接続**: 1-9 で取った1件を書き換えて保存する
+
+### 10-0. このステップの初出
+
+**Django / Ninja**: `model_dump(exclude_unset=True)`, `save()` / **Python**: `str | None`, `for ... in ...items()`, `setattr`
+
+> 🧒 **かみくだくと**: **PATCH** は一部だけ変える HTTP メソッド。全部を送り直す `PUT` と区別する。
+
+### 10-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`config/api.py`（差分。`PostOut` の上に書式を1つ、末尾に関数を1つ足す）
+
+```python
+class PostPatch(Schema):
+    # 更新の書式。どの項目も省略してよい（省略した項目は変えない）
+    title: str | None = Field(default=None, max_length=200)
+    body: str | None = None
+
+
+# （中略）
+
+
+@api.patch("/posts/{post_id}", response=PostOut)
+def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
+    post = get_object_or_404(Post, id=post_id)
+    # 送られてきた項目だけを取り出す（省略した項目・null の項目は入らない）
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    for name, value in changes.items():
+        setattr(post, name, value)  # post.title = value と同じ
+    post.save()
+    return post
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1（ruff・mypy も通過）
+
+```bash
+curl -s -X PATCH http://127.0.0.1:8000/api/posts/1 \
+  -H 'Content-Type: application/json' -d '{"title": "題名だけ変えた"}'
+```
+
+```text
+{"id": 1, "title": "題名だけ変えた", "body": "本文です", "created_at": "2026-10-11T11:19:47.685Z"}
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（`body` はそのまま。MySQL の `updated_at` は更新された）
+
+`save()` が出す SQL（shell で確認）:
+
+```sql
+UPDATE `blog_post` SET `title` = 'shell で変更', `body` = '本文です', `created_at` = '2026-10-11 11:19:47.685476', `updated_at` = '2026-10-11 11:19:54.141047' WHERE `blog_post`.`id` = 1
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+### 10-2. 🔬 仕組み解剖
+
+| | `model_dump(exclude_unset=True)` | `save()` |
+| --- | --- | --- |
+| 正式名称 | Pydantic の `model_dump` | `Model.save()` |
+| いつ・誰が | 送られた項目だけの辞書を作る | 呼んだ瞬間に SQL を出す（`id` があるので `UPDATE`） |
+| TS での対応物 | 対応物なし | 対応物なし（ORM の機能） |
+| なぜこの設計 | 「省略 = 変えない」を表せる | 新規か更新かを Django が判断する |
+| 失敗すると | `null` を除かないと 500 | 変えていない列も書き直す |
+
+```text
+{"title": "題名だけ変えた"}
+  └→ PostPatch で検査 … 型・長さが違えば 422
+       └→ model_dump(...) → {"title": "題名だけ変えた"}（body は入らない）
+            └→ setattr で post に書き込む → save() → UPDATE → 200
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11
+
+見てほしいのは、**送らなかった `body` が辞書に入らない**点です。
+
+### 10-3. 🐍 Python注
+
+> 🐍 `str | None` は「文字列か None」。TS の `string | null`。
+> 🐍 `for name, value in changes.items():` は辞書の名前と値を1組ずつ取り出す。`setattr` は `post[name] = value` に近い。
+
+### 10-4. 解説 — なぜこう設計するか
+
+`exclude_none=True` で、`null` は「変えない」扱いにしました。`title` の列は空にできないためです。
+
+🧠 Django の考え方: 変える項目はスキーマで絞り、保存は `save()` に任せる。
+
+### 10-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 書き直す列を絞るなら `save(update_fields=[...])`。`auto_now` の列も名前に入れる。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/models/instances/#specifying-which-fields-to-save
+
+```sql
+-- p.save(update_fields=["title", "updated_at"]) の SQL
+UPDATE `blog_post` SET `title` = 'u', `updated_at` = '2026-10-11 11:21:01.202272' WHERE `blog_post`.`id` = 1
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+### 10-6. 🔮 予測 → 動作確認
+
+1. `{}`（空）を送ると？
+2. `{"title": null}` を送ると？
+3. `exclude_none=True` を消して `{"title": null}` を送ると？（試したら戻す）
+
+<details><summary>答え</summary>
+
+1. 200。何も変わらない
+2. 200。`exclude_none` で除かれ、何も変わらない
+3. 500。`IntegrityError: (1048, "Column 'title' cannot be null")`（検証済み）
+
+</details>
+
+### 10-7. ✅ 想起チェック
+
+1. 「送られた項目だけ」を取り出す指定は？
+
+<details><summary>答え</summary>
+
+1. `model_dump(exclude_unset=True)`
+
+</details>
+
+### 10-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **PATCH は「送られた項目だけ」を `model_dump(exclude_unset=True)` で取り出す。**
+
+📒 用語集に追記: PATCH / PUT
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ11` — 削除
