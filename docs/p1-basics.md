@@ -1609,3 +1609,139 @@ UPDATE `blog_post` SET `title` = 'u', `updated_at` = '2026-10-11 11:21:01.202272
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第1部 ステップ11` — 削除
+
+---
+
+## 第1部-11: 削除
+
+**❓ この回の問い**: 作成・取得・更新ができた。最後の削除は、成功したとき何を返せばよいのか？
+
+**作るもの**: `DELETE /api/posts/{post_id}` が 204（中身なし）を返す
+**重要度**: 🔴 毎日使う — CRUD の最後の1つ
+**前ステップとの接続**: 1-10 と同じく1件を取り、今度は消す
+
+### 11-0. このステップの初出
+
+**Django / Ninja**: `delete()`, 204 と `response={204: None}` / **Python**: `None`
+
+> 🧒 **かみくだくと**: **204** は「成功した。返す中身は無い」というステータス。削除のように、返すものが無い成功で使う。
+
+### 11-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`config/api.py`（差分。末尾に関数を1つ足す）
+
+```python
+@api.delete("/posts/{post_id}", response={204: None})
+def delete_post(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    post.delete()
+    return 204, None  # 204 は「成功。返す中身は無い」
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1（ruff・mypy も通過）
+
+```bash
+curl -s -i -X DELETE http://127.0.0.1:8000/api/posts/1
+curl -s -w '\n%{http_code}\n' -X DELETE http://127.0.0.1:8000/api/posts/1
+```
+
+```text
+HTTP/1.1 204 No Content
+Content-Length: 0
+（以下ヘッダーは略）
+{"detail": "Not Found: No Post matches the given query."}
+404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（1回目は 204、同じ id の2回目は 404）
+
+発行される SQL（shell で確認）:
+
+```sql
+SELECT `blog_post`.`id`, `blog_post`.`title`, `blog_post`.`body`, `blog_post`.`created_at`, `blog_post`.`updated_at` FROM `blog_post` WHERE `blog_post`.`id` = 1 LIMIT 21
+DELETE FROM `blog_post` WHERE `blog_post`.`id` IN (1)
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+### 11-2. 🔬 仕組み解剖
+
+| | `delete()` | `response={204: None}` |
+| --- | --- | --- |
+| 正式名称 | `Model.delete()` | 中身の無い応答の宣言 |
+| いつ・誰が | 呼んだ瞬間に `DELETE` を出す。戻り値は `(1, {'blog.Post': 1})`（消えた件数） | 関数が `204, None` を返したとき、Ninja が本文の無い応答にする |
+| TS での対応物 | 対応物なし（ORM の機能） | Express の `res.status(204).end()` |
+| なぜこの設計 | 関連するデータも、まとめて消せる作りになっている（第2部で見る） | 「消えたものは返せない」を宣言で表す |
+| 失敗すると | — | 宣言に無いステータスを返すと 500（1-7 で見た） |
+
+```text
+DELETE /api/posts/1
+  └→ get_object_or_404 … SELECT。無ければ 404
+       └→ post.delete() … DELETE
+            └→ return 204, None → 本文なしの 204
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+見てほしいのは、**SQL が2本（探す・消す）出ている**ことです。
+
+### 11-3. 🐍 Python注
+
+> 🐍 `None` は「値が無い」を表す。TS の `null` に当たる。
+
+### 11-4. 解説 — なぜこう設計するか
+
+これで `/api/posts` の CRUD（作成・一覧・取得・更新・削除）がそろいました。どの操作も「宣言（スキーマ）＋ ORM 1〜2行」の同じ形です。
+
+🧠 Django の考え方: 同じ形を繰り返せるように、宣言と ORM で書く。
+
+### 11-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 消すだけなら `Post.objects.filter(id=post_id).delete()` でも書ける。探す SQL が要らず、戻り値の件数が 0 なら「無かった」と分かる。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/queries/#deleting-objects
+
+```sql
+-- Post.objects.filter(id=2).delete() の SQL（戻り値は (1, {'blog.Post': 1})）
+BEGIN
+DELETE FROM `blog_post` WHERE `blog_post`.`id` = 2
+COMMIT
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+### 11-6. 🔮 予測 → 動作確認
+
+1. 同じ id を2回 `DELETE` すると、2回目は？
+2. 204 の応答の本文は？
+
+<details><summary>答え</summary>
+
+1. 404。もう無いので `get_object_or_404` で止まる
+2. 空（`Content-Length: 0`）
+
+</details>
+
+### 11-7. ✅ 想起チェック
+
+1. 削除の成功で 200 ではなく 204 を返すのはなぜ？
+
+<details><summary>答え</summary>
+
+1. 返す中身が無いから。204 は「成功・中身なし」を表す
+
+</details>
+
+### 11-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **削除は `delete()` で消し、中身の無い成功として 204 を返す。**
+
+📒 用語集に追記: 204 / CRUD
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第1部 ステップ12` — テストで固定する
