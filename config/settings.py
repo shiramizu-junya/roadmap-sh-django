@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -131,3 +132,18 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # 末尾に追加: 標準の auth.User の代わりに、accounts アプリの User を使う
 AUTH_USER_MODEL = "accounts.User"
+
+# 実行された SQL を runserver のコンソールに出す（開発用）。
+# Django は DEBUG = True のときだけ SQL を記録する。SQL_LOG=0 で止められる
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "DEBUG" if os.environ.get("SQL_LOG", "1") == "1" else "INFO",
+            "propagate": False,
+        },
+    },
+}

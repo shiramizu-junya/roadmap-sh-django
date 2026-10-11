@@ -12,6 +12,7 @@ mysqlclient = { PKG_CONFIG_PATH = "/opt/homebrew/opt/mysql-client/lib/pkgconfig"
 
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.22",
     "django-stubs[compatible-mypy]>=5.2,<6.0",
     "ruff>=0.16.10",
 ]
