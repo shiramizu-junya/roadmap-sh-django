@@ -197,17 +197,18 @@ uv run pre-commit install   # .git/hooks に仕掛けを置く（最初の1回�
 ```yaml
 # コミットの直前に、自動で検査を走らせる設定
 # 道具はプロジェクトに入っているもの（uv run）をそのまま使う
+# --force-exclude: pyproject.toml の除外（migrations）を、渡されたファイルにも効かせる
 repos:
   - repo: local
     hooks:
       - id: ruff-check
         name: ruff check（書き方の誤り。直せるものは直す）
-        entry: uv run ruff check --fix
+        entry: uv run ruff check --fix --force-exclude
         language: system
         types: [python]
       - id: ruff-format
         name: ruff format（見た目を揃える）
-        entry: uv run ruff format
+        entry: uv run ruff format --force-exclude
         language: system
         types: [python]
       - id: mypy
@@ -511,3 +512,228 @@ def test_category_in_use_cannot_be_deleted() -> None:
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ3` — タグ（多対多）
+
+---
+
+## 第2部-3: タグ（多対多）
+
+**❓ この回の問い**: カテゴリは1つだった。記事に**いくつも**付けるタグは、どうつなぐ？
+
+**作るもの**: 記事に複数のタグを付け、応答にタグを入れ子で返す
+**重要度**: 🔴 毎日使う — タグ・お気に入りなどでよく出る
+**前ステップとの接続**: 2-2 に続き、もう1つのつなぎ方を足す
+
+### 3-0. このステップの初出
+
+**Django / Ninja**: `ManyToManyField`（と `.set()`）, 入れ子の `Schema` / **Python**: なし
+
+> 🧒 **かみくだくと**: **多対多**は「記事に複数のタグ、タグに複数の記事」の関係。
+> 間に、組を書き並べる**つなぎの台帳**が要る。
+
+### 3-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+`blog/models.py`（差分。`Post` の上に `Tag` を足し、`Post` に1項目足す）
+
+```python
+class Tag(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Post(models.Model):
+    # （既存の項目はそのまま）
+    # 多対多: 1つの記事に複数のタグ、1つのタグに複数の記事
+    tags = models.ManyToManyField(Tag, blank=True)
+```
+
+`blog/admin.py`（差分）: `Tag` も import し、`admin.site.register(Tag)` を足す。
+
+```bash
+uv run python manage.py makemigrations
+SQL_LOG=0 uv run python manage.py sqlmigrate blog 0003
+uv run python manage.py migrate
+```
+
+```sql
+CREATE TABLE `blog_tag` (`id` bigint AUTO_INCREMENT NOT NULL PRIMARY KEY, `name` varchar(30) NOT NULL UNIQUE);
+CREATE TABLE `blog_post_tags` (`id` bigint AUTO_INCREMENT NOT NULL PRIMARY KEY, `post_id` bigint NOT NULL, `tag_id` bigint NOT NULL);
+ALTER TABLE `blog_post_tags` ADD CONSTRAINT `blog_post_tags_post_id_tag_id_4925ec37_uniq` UNIQUE (`post_id`, `tag_id`);
+ALTER TABLE `blog_post_tags` ADD CONSTRAINT `blog_post_tags_post_id_a1c71c8a_fk_blog_post_id` FOREIGN KEY (`post_id`) REFERENCES `blog_post` (`id`);
+ALTER TABLE `blog_post_tags` ADD CONSTRAINT `blog_post_tags_tag_id_0875c551_fk_blog_tag_id` FOREIGN KEY (`tag_id`) REFERENCES `blog_tag` (`id`);
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（`+ Create model Tag` / `+ Add field tags to post`）
+
+`blog/api.py`（差分）
+
+```python
+from .models import Category, Post, Tag
+
+
+class PostIn(Schema):
+    title: str = Field(max_length=200)
+    body: str
+    category_id: int | None = None  # 省略したらカテゴリなし
+    tag_ids: list[int] = []  # 付けるタグの id。省略したらタグなし
+
+
+class TagOut(Schema):
+    id: int
+    name: str
+
+
+class PostOut(Schema):
+    id: int
+    title: str
+    body: str
+    created_at: datetime
+    category_id: int | None
+    tags: list[TagOut]  # 入れ子: 記事の中にタグの一覧を入れて返す
+
+
+@router.post("", response={201: PostOut})
+def create_post(request: HttpRequest, payload: PostIn):
+    category = None
+    if payload.category_id is not None:
+        category = get_object_or_404(Category, id=payload.category_id)
+    # 無いタグが1つでもあれば 404（記事を作る前に確かめる）
+    tags = [get_object_or_404(Tag, id=tag_id) for tag_id in payload.tag_ids]
+    post = Post.objects.create(title=payload.title, body=payload.body, category=category)
+    post.tags.set(tags)  # つなぎの台帳（blog_post_tags）に行を入れる
+    return Status(201, post)
+```
+
+管理画面でタグを2つ作ってから試します。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/posts \
+  -H 'Content-Type: application/json' -d '{"title": "タグ付き", "body": "b", "tag_ids": [1, 2]}'
+```
+
+```text
+{"id": 1, "title": "タグ付き", "body": "b", "created_at": "2026-10-12T07:46:59.333Z", "category_id": null, "tags": [{"id": 1, "name": "python"}, {"id": 2, "name": "django"}]}
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過。`id` は手元のデータで変わる）
+
+`.set()` が出す SQL（runserver のログ）:
+
+```sql
+SELECT `blog_tag`.`id` AS `id` FROM `blog_tag` INNER JOIN `blog_post_tags` ON (`blog_tag`.`id` = `blog_post_tags`.`tag_id`) WHERE `blog_post_tags`.`post_id` = 1
+INSERT IGNORE INTO `blog_post_tags` (`post_id`, `tag_id`) VALUES (1, 1), (1, 2)
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（前後に `BEGIN` / `COMMIT` が付く）
+
+**テスト**（3回目なので要件だけ）: `tests/test_tags.py` に次の2件を書く。
+- タグ2つを付けて作ると 201。応答の `tags` の名前が付けた2つと一致
+- 無いタグ `999` は 404。記事は保存されない
+
+<details><summary>解答例</summary>
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from blog.models import Post, Tag
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_create_post_with_tags() -> None:
+    python = Tag.objects.create(name="python")
+    django = Tag.objects.create(name="django")
+
+    res = client.post("/posts", json={"title": "t", "body": "b", "tag_ids": [python.id, django.id]})
+    assert res.status_code == 201
+    # 並び順は保証されないので、並べ替えてから比べる
+    assert sorted(tag["name"] for tag in res.json()["tags"]) == ["django", "python"]
+
+
+@pytest.mark.django_db
+def test_unknown_tag_is_404_and_nothing_saved() -> None:
+    res = client.post("/posts", json={"title": "t", "body": "b", "tag_ids": [999]})
+    assert res.status_code == 404
+    assert Post.objects.count() == 0
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（`9 passed` を3回続けて確認）
+
+</details>
+
+### 3-2. 🔬 仕組み解剖
+
+| | `ManyToManyField` | 入れ子の `Schema` |
+| --- | --- | --- |
+| 正式名称 | 多対多のフィールド（`.set()` で付け替える） | Schema の中に Schema のリストを置く |
+| いつ・誰が | マイグレーションで、つなぎの台帳を作る（`blog_post` の列は増えない） | 応答を作るとき、`post.tags` から中身を取り出す |
+| TS での対応物 | 対応物なし（ORM の機能） | 型 `{ tags: { id: number; name: string }[] }` |
+| なぜこの設計 | 1列に値は1つなので、組を別の台帳に並べる | 記事とタグを一度に渡せる |
+| 失敗すると | 同じ組は `UNIQUE` で1行のまま | 取り出しで SQL が増える（3-6） |
+
+```text
+blog_post            blog_post_tags（つなぎ）   blog_tag
+id │ title           post_id │ tag_id           id │ name
+ 1 │ タグ付き ───→      1    │   1   ───→        1 │ python
+                        1    │   2   ───→        2 │ django
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+見てほしいのは、**記事とタグの間にもう1つ台帳がある**点。
+
+### 3-3. 🐍 Python注
+
+（この回は新しい文法なし）
+
+### 3-4. 解説 — なぜこう設計するか
+
+`ForeignKey` は相手の `id` を1つ書く列でした。多対多は1つに決まらないので、組を行で並べます。
+
+🧠 Django の考え方: つなぎの台帳は Django が隠し、書く側は `post.tags` だけ扱う。
+
+### 3-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: `.set()` は今の組と比べ、足りない分を足して余分を消す。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/models/relations/#django.db.models.fields.related.RelatedManager.set
+
+### 3-6. 🔮 予測 → 動作確認
+
+1. 記事が3件ある一覧 `GET /api/posts` では、SQL は何本？
+2. タグを `[python, django]` の順で付けたら、応答もその順？
+
+<details><summary>答え</summary>
+
+1. 4本。一覧で1本、記事ごとのタグで1本ずつ（検証済み）。2-4 で減らす
+2. 保証されない。テストでは逆順で返った（並び順の決め方は 2-12）
+
+</details>
+
+### 3-7. ✅ 想起チェック
+
+1. `ManyToManyField` を足したとき、`blog_post` に列は増える？
+
+<details><summary>答え</summary>
+
+1. 増えない。つなぎの台帳ができる
+
+</details>
+
+### 3-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **多対多は、つなぎの台帳に「記事とタグの組」を並べてつなぐ。**
+
+📒 用語集に追記: 多対多 / つなぎの台帳
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ4` — N+1 問題を見て直す

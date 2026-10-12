@@ -49,3 +49,5 @@
 | 多対一 | many-to-one | 「記事は1つのカテゴリに属し、カテゴリには多くの記事」の関係。`ForeignKey` で表す | 第2部-2 |
 | 外部キー | foreign key | 別の台帳の `id` を書いておく列（例: `category_id`）。無い `id` は DB が拒否する | 第2部-2 |
 | on_delete | `on_delete` | 参照先が消されるときの決まり（`PROTECT` / `CASCADE` / `SET_NULL` など）。Django が実行する | 第2部-2 |
+| 多対多 | many-to-many | 「記事に複数のタグ、タグに複数の記事」の関係。`ManyToManyField` で表す | 第2部-3 |
+| つなぎの台帳 | 中間テーブル（through table） | 多対多の組（`post_id` と `tag_id`）を並べる台帳。`blog_post_tags` など。Django が自動で作る | 第2部-3 |
