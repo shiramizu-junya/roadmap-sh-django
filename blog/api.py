@@ -4,7 +4,7 @@ from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
 
-from .models import Post
+from .models import Category, Post
 
 # 記事の API 一式。URL の頭（/posts）は config/api.py で決める
 router = Router()
@@ -13,6 +13,7 @@ router = Router()
 class PostIn(Schema):
     title: str = Field(max_length=200)
     body: str
+    category_id: int | None = None  # 省略したらカテゴリなし
 
 
 class PostPatch(Schema):
@@ -25,6 +26,7 @@ class PostOut(Schema):
     title: str
     body: str
     created_at: datetime
+    category_id: int | None
 
 
 @router.get("", response=list[PostOut])
@@ -34,7 +36,11 @@ def list_posts(request: HttpRequest):
 
 @router.post("", response={201: PostOut})
 def create_post(request: HttpRequest, payload: PostIn):
-    post = Post.objects.create(title=payload.title, body=payload.body)
+    category = None
+    if payload.category_id is not None:
+        # 無いカテゴリを指定されたら 404（DB の外部キーで弾かれる前に止める）
+        category = get_object_or_404(Category, id=payload.category_id)
+    post = Post.objects.create(title=payload.title, body=payload.body, category=category)
     return Status(201, post)
 
 
