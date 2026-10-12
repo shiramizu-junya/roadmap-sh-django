@@ -4,7 +4,7 @@ from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
 
-from .models import Category, Post
+from .models import Category, Post, Tag
 
 # 記事の API 一式。URL の頭（/posts）は config/api.py で決める
 router = Router()
@@ -14,6 +14,12 @@ class PostIn(Schema):
     title: str = Field(max_length=200)
     body: str
     category_id: int | None = None  # 省略したらカテゴリなし
+    tag_ids: list[int] = []  # 付けるタグの id。省略したらタグなし
+
+
+class TagOut(Schema):
+    id: int
+    name: str
 
 
 class PostPatch(Schema):
@@ -27,6 +33,7 @@ class PostOut(Schema):
     body: str
     created_at: datetime
     category_id: int | None
+    tags: list[TagOut]  # 入れ子: 記事の中にタグの一覧を入れて返す
 
 
 @router.get("", response=list[PostOut])
@@ -38,9 +45,11 @@ def list_posts(request: HttpRequest):
 def create_post(request: HttpRequest, payload: PostIn):
     category = None
     if payload.category_id is not None:
-        # 無いカテゴリを指定されたら 404（DB の外部キーで弾かれる前に止める）
         category = get_object_or_404(Category, id=payload.category_id)
+    # 無いタグが1つでもあれば 404（記事を作る前に確かめる）
+    tags = [get_object_or_404(Tag, id=tag_id) for tag_id in payload.tag_ids]
     post = Post.objects.create(title=payload.title, body=payload.body, category=category)
+    post.tags.set(tags)  # つなぎの台帳（blog_post_tags）に行を入れる
     return Status(201, post)
 
 

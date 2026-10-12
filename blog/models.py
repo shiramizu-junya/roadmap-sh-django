@@ -8,6 +8,13 @@ class Category(models.Model):
         return self.name
 
 
+class Tag(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Post(models.Model):
     title = models.CharField(max_length=200)  # 短い文字列（上限200文字）
     body = models.TextField()  # 長い文章（上限なし）
@@ -20,6 +27,8 @@ class Post(models.Model):
         null=True,  # 既存の記事にはカテゴリが無いので、空を許す
         blank=True,  # 管理画面の入力欄も空でよい
     )
+    # 多対多: 1つの記事に複数のタグ、1つのタグに複数の記事
+    tags = models.ManyToManyField(Tag, blank=True)
 
     def __str__(self) -> str:
         return self.title
