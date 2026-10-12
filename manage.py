@@ -13,6 +13,8 @@ def start_debugpy_if_requested() -> None:
     # リクエストを処理するのは子（RUN_MAIN=true）なので、そちらでだけ待つ
     if "runserver" in sys.argv and os.environ.get("RUN_MAIN") != "true":
         return
+    # Python 本体の一部（frozen modules）について出る警告を止める。自分のコードの停止には影響しない
+    os.environ.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
     import debugpy
 
     port = int(os.environ.get("DEBUGPY_PORT", "5678"))

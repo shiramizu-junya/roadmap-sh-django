@@ -1,9 +1,16 @@
 [
   {
-    "label": "Django: runserver にアタッチ（DEBUGPY=1 で起動しておく）",
+    "label": "Django: サーバにアタッチ（DEBUGPY=1 uv run python manage.py runserver）",
     "adapter": "Debugpy",
     "request": "attach",
     "connect": { "host": "127.0.0.1", "port": 5678 },
+    "justMyCode": true
+  },
+  {
+    "label": "Django: テストにアタッチ（DEBUGPY=1 uv run pytest ...）",
+    "adapter": "Debugpy",
+    "request": "attach",
+    "connect": { "host": "127.0.0.1", "port": 5679 },
     "justMyCode": true
   }
 ]
