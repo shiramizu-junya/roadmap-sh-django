@@ -51,3 +51,5 @@
 | on_delete | `on_delete` | 参照先が消されるときの決まり（`PROTECT` / `CASCADE` / `SET_NULL` など）。Django が実行する | 第2部-2 |
 | 多対多 | many-to-many | 「記事に複数のタグ、タグに複数の記事」の関係。`ManyToManyField` で表す | 第2部-3 |
 | つなぎの台帳 | 中間テーブル（through table） | 多対多の組（`post_id` と `tag_id`）を並べる台帳。`blog_post_tags` など。Django が自動で作る | 第2部-3 |
+| N+1 問題 | N+1 query problem | 一覧の SQL 1本のあと、1件ごとに関連データを取りに行き、SQL が「1 + 件数」本になること | 第2部-4 |
+| JOIN | JOIN | 2つの台帳を、つなぐ列（`category_id` など）で横に並べて1つの結果にする SQL | 第2部-4 |

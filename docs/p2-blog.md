@@ -737,3 +737,175 @@ id │ title           post_id │ tag_id           id │ name
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ4` — N+1 問題を見て直す
+
+---
+
+## 第2部-4: N+1 問題を見て直す
+
+**❓ この回の問い**: 2-3 で、記事3件の一覧に SQL が4本出た。1000件なら何本？
+
+**作るもの**: 記事が何件でも、一覧の SQL を2本にする
+**重要度**: 🔴 毎日使う — 一覧 API を書くたびに確かめる
+**前ステップとの接続**: 2-3 の一覧にカテゴリも足してから直す
+
+### 4-0. このステップの初出
+
+**Django / Ninja**: `select_related`, `prefetch_related` / **Python**: なし
+
+> 🧒 **かみくだくと**: **N+1 問題**は、一覧の SQL 1本のあとに、1件ごとに関連データを取りに行くこと。
+> SQL が「1 + 件数」本になる。
+
+### 4-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① カテゴリも入れ子で返す**（`blog/api.py` の差分）
+
+```python
+class CategoryOut(Schema):
+    id: int
+    name: str
+
+
+class PostOut(Schema):
+    # （既存の項目はそのまま）
+    category: CategoryOut | None  # 入れ子: カテゴリの名前も返す
+```
+
+記事3件（カテゴリ・タグ付き）の一覧で、SQL が7本出ます。
+
+```sql
+SELECT ... FROM `blog_post`
+SELECT ... FROM `blog_category` WHERE `blog_category`.`id` = 1 LIMIT 21
+SELECT ... FROM `blog_tag` INNER JOIN `blog_post_tags` ... WHERE `blog_post_tags`.`post_id` = 1
+SELECT ... FROM `blog_category` WHERE `blog_category`.`id` = 2 LIMIT 21
+SELECT ... FROM `blog_tag` INNER JOIN `blog_post_tags` ... WHERE `blog_post_tags`.`post_id` = 2
+SELECT ... FROM `blog_category` WHERE `blog_category`.`id` = 1 LIMIT 21
+SELECT ... FROM `blog_tag` INNER JOIN `blog_post_tags` ... WHERE `blog_post_tags`.`post_id` = 3
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（列名は `...` で省略。同じカテゴリ `id = 1` も2回取っている）
+
+**② 直す**（`blog/api.py` の `list_posts`）
+
+```python
+@router.get("", response=list[PostOut])
+def list_posts(request: HttpRequest):
+    return (
+        Post.objects.select_related("category")  # カテゴリは JOIN で同じ SQL に入れる
+        .prefetch_related("tags")  # タグは別の SQL 1本でまとめて取る
+        .all()
+    )
+```
+
+```sql
+SELECT `blog_post`.`id`, ..., `blog_category`.`id`, `blog_category`.`name` FROM `blog_post` LEFT OUTER JOIN `blog_category` ON (`blog_post`.`category_id` = `blog_category`.`id`)
+SELECT (`blog_post_tags`.`post_id`) AS `_prefetch_related_val_post_id`, `blog_tag`.`id`, `blog_tag`.`name` FROM `blog_tag` INNER JOIN `blog_post_tags` ON (`blog_tag`.`id` = `blog_post_tags`.`tag_id`) WHERE `blog_post_tags`.`post_id` IN (1, 2, 3)
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（記事10件でも2本。応答の中身は直す前と同じ）
+
+**③ 本数をテストで固定する**（`tests/test_query_count.py` 新規・全文）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from blog.models import Category, Post, Tag
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("n_posts", [3, 10])  # 記事3件と10件で、同じテストを2回流す
+def test_list_posts_query_count_does_not_grow(n_posts: int, django_assert_num_queries) -> None:
+    category = Category.objects.create(name="日記")
+    tags = [Tag.objects.create(name="python"), Tag.objects.create(name="django")]
+    for i in range(n_posts):
+        post = Post.objects.create(title=f"記事{i}", body="b", category=category)
+        post.tags.set(tags)
+
+    # この中で出た SQL がちょうど2本でなければ失敗する
+    with django_assert_num_queries(2):
+        res = client.get("/posts")
+
+    assert res.status_code == 200
+    assert len(res.json()) == n_posts
+```
+
+✅ 検証済み: pytest-django 4.14.0（`11 passed`。ruff・mypy も通過）
+
+`django_assert_num_queries` は pytest-django の道具です。引数に名前を書くと pytest が渡します。`parametrize` は、値を変えて同じテストを流す指定です。
+
+### 4-2. 🔬 仕組み解剖
+
+| | `select_related` | `prefetch_related` |
+| --- | --- | --- |
+| 正式名称 | QuerySet の `select_related()` | QuerySet の `prefetch_related()` |
+| いつ・誰が | 一覧の SQL に JOIN を足す | `IN (…)` の SQL を1本足し、Python でつなぐ |
+| TS での対応物 | 対応物なし | DataLoader の「まとめて取る」に近い |
+| なぜこの設計 | 相手が1つなら JOIN で行が増えない | 相手が複数だと行が増えるので分ける |
+| 失敗すると | 多対多に使うと `FieldError`（検証済み） | 付け忘れると N+1 に戻る |
+
+```text
+直す前: 1 + 3 + 3 = 7本 … 記事が増えると増える
+直した後:
+  ① SELECT 記事 LEFT OUTER JOIN カテゴリ      … 1本
+  ② SELECT タグ WHERE post_id IN (1, 2, 3)    … 1本
+  合計 2本 … 記事が何件でも変わらない
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11
+
+見てほしいのは、**本数が件数に比例しなくなった**点。
+
+### 4-3. 🐍 Python注
+
+（この回は新しい文法なし）
+
+### 4-4. 解説 — なぜこう設計するか
+
+`QuerySet` は使うまで SQL を出しません（1-5）。だから「何を一緒に取るか」を前もって足せます。
+
+🧠 Django の考え方: 取り方の指示は QuerySet に足すだけ。
+
+### 4-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 多対一は `select_related`、多対多は `prefetch_related`。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/models/querysets/#prefetch-related
+
+### 4-6. 🔮 予測 → 動作確認
+
+1. 直す前のコードで、記事10件なら SQL は何本？
+2. 直す前のコードで ③ のテストを流すと？（試したら戻す）
+
+<details><summary>答え</summary>
+
+1. 21本（1 + カテゴリ10 + タグ10。7本の内訳からの計算）
+2. 失敗する。`Failed: Expected to perform 2 queries but 7 were done`（記事3件の回。検証済み）
+
+</details>
+
+### 4-7. ✅ 想起チェック
+
+1. カテゴリは `select_related`、タグは `prefetch_related`。分けたのはなぜ？
+
+<details><summary>答え</summary>
+
+1. カテゴリは1件に1つで JOIN で済む。タグは複数で、JOIN すると行が増える
+
+</details>
+
+### 4-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **一覧は、関連データを `select_related` / `prefetch_related` でまとめて取る。**
+
+📒 用語集に追記: N+1 問題 / JOIN
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ5` — ミドルウェア
