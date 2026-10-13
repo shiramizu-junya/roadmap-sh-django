@@ -22,6 +22,11 @@ class TagOut(Schema):
     name: str
 
 
+class CategoryOut(Schema):
+    id: int
+    name: str
+
+
 class PostPatch(Schema):
     title: str | None = Field(default=None, max_length=200)
     body: str | None = None
@@ -34,11 +39,16 @@ class PostOut(Schema):
     created_at: datetime
     category_id: int | None
     tags: list[TagOut]  # 入れ子: 記事の中にタグの一覧を入れて返す
+    category: CategoryOut | None  # 入れ子: カテゴリの名前も返す
 
 
 @router.get("", response=list[PostOut])
 def list_posts(request: HttpRequest):
-    return Post.objects.all()
+    return (
+        Post.objects.select_related("category")  # カテゴリは JOIN で同じ SQL に入れる
+        .prefetch_related("tags")  # タグは別の SQL 1本でまとめて取る
+        .all()
+    )
 
 
 @router.post("", response={201: PostOut})
