@@ -483,7 +483,7 @@ roadmap-sh-django/
 **ルール**
 
 - §5「本編で扱う」の**行き先ステップがすべて終わったトピック**だけを完了にする。一部だけ済んだものは付けない
-- 反映するのは**各部の M2（部末パック）のとき**と、**拡張モジュールを1つ終えたとき**。最後に M3 で全体を見直す
+- 反映は**全教材（本編・拡張モジュール）を終えたあとに1回だけ**まとめて行う。部やモジュールごとには付けない
 - 「扱わない」のトピックには付けない（付けるかどうかは読者が決める）
 - 操作は Claude in Chrome で行う。roadmap.sh では右クリックが「完了」の切り替えなので、**すでに完了のトピックには触らない**（押すと外れる）。付けたあとは再読み込みして、保存されたことを確かめる
 
@@ -491,9 +491,9 @@ roadmap-sh-django/
 
 Introduction / Installing Django / Virtual envs / MySQL / Setting up the Database / Projects & Apps / manage.py / settings.py / Running your Project / urls.py（2つ）/ URL patterns / Custom user model / Built-in user model / Models / models.py / Fields types / Field options / Migrations（2つ）/ Django ORM / Django Admin / admin.py / Views（2つ）/ Function-based views / Request-Response flow / The MVC Model / Querying data / Django Shell / Create, Update, Delete / Debugging / CSRF / Django Ninja / Web frameworks / Path converters / Middleware / Routing Middleware / Customization / Logging / Loggers / Handlers / Authentication
 
-**これから反映するもの**
+**全教材を終えたら反映するもの**
 
-| 反映のタイミング | トピック | 完了になるステップ |
+| 教材の区切り | トピック | 完了になるステップ |
 | --- | --- | --- |
 | 第2部 M2 | Authorization / Users & Permissions | 2-7 |
 | 第2部 M2 | Model Relationships | 2-9（2-2・2-3 は済み。2-8 一対一、2-9 自己参照で完了） |
@@ -506,13 +506,13 @@ Introduction / Installing Django / Virtual envs / MySQL / Setting up the Databas
 | 第3部 M2 | Transactions | 3-8（3-3・3-5 も含む） |
 | 第3部 M2 | pytest / Django Test Framework / tests.py / unittest & TestCase | 3-8（1-12 で基本は済み） |
 | 第3部 M2 | Query Optimization | 3-9（2-4 は済み） |
-| `MX: celery` のあと | Background Tasks / Celery | celery |
-| `MX: cache` のあと | Caching | cache |
-| `MX: signals` のあと | Signals | signals |
-| `MX: drf` のあと | Django REST Framework / Serializers / Routers / Views & ViewSets | drf |
-| `MX: websocket` のあと | Asynchronous Django（ASGI の範囲だけなので、付けるかはそのとき判断する） | websocket |
+| `MX: celery` | Background Tasks / Celery | celery |
+| `MX: cache` | Caching | cache |
+| `MX: signals` | Signals | signals |
+| `MX: drf` | Django REST Framework / Serializers / Routers / Views & ViewSets | drf |
+| `MX: websocket` | Asynchronous Django（ASGI の範囲だけなので、付けるかはそのとき判断する） | websocket |
 
-> 💡補足: Model inheritance と Model methods は、2026-10-13 の時点ですでに完了になっていた（この教材より前に付けたもの）。上の表のステップを終えるまでは、そのままにしておく。
+> 💡補足: Model inheritance と Model methods は、2026-10-13 の時点ですでに完了になっていた（この教材より前に付けたもの）。最後の反映のときも、そのままにしておく。
 
 ---
 
