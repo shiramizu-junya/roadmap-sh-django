@@ -50,6 +50,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "config.middleware.timing_middleware",  # 追加: 一番外側で全体の時間を測る
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -149,6 +150,12 @@ LOGGING = {
         "django.db.backends": {
             "handlers": ["console"],
             "level": "DEBUG" if os.environ.get("SQL_LOG", "1") == "1" else "INFO",
+            "propagate": False,
+        },
+        # 追加: 自作ミドルウェアのログ。INFO 以上をコンソールに出す
+        "config.middleware": {
+            "handlers": ["console"],
+            "level": "INFO",
             "propagate": False,
         },
     },
