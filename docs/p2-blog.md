@@ -909,3 +909,189 @@ def test_list_posts_query_count_does_not_grow(n_posts: int, django_assert_num_qu
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ5` — ミドルウェア
+
+---
+
+## 第2部-5: ミドルウェア
+
+**❓ この回の問い**: 2-4 で SQL は2本になった。では、1回のリクエストに何ミリ秒かかっている？
+
+**作るもの**: 全リクエストの所要時間を、runserver のコンソールに1行で出す
+**重要度**: 🟡 読めればよい — 自作は少ないが、`MIDDLEWARE` の並びはよく読む
+**前ステップとの接続**: `settings.py` の `MIDDLEWARE` と `LOGGING` に1つずつ足す
+
+### 5-0. このステップの初出
+
+**Django / Ninja**: `MIDDLEWARE`（自作）, `LOGGING` / **Python**: 関数の中の関数, `__name__`
+
+> 🧒 **かみくだくと**: **ミドルウェア**は、窓口の順路に置かれた共通の検査。
+> 全リクエストが、行きと帰りに必ず通る。
+> **ロガー**は、名前付きのログの出し口。何を画面に出すかは `LOGGING` で決める。
+
+### 5-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① ミドルウェアを書く**（`config/middleware.py` 新規・全文）
+
+```python
+import logging
+import time
+
+# ログの出し口。名前は "config.middleware"（このファイルの場所）になる
+logger = logging.getLogger(__name__)
+
+
+def timing_middleware(get_response):
+    # ここはサーバ起動時に1回だけ動く。get_response は「次の層」
+    def middleware(request):
+        # ここから下は、リクエストのたびに動く
+        start = time.perf_counter()
+        response = get_response(request)  # 次の層へ渡す。戻ってくるとレスポンスがある
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "%s %s -> %s (%.1f ms)",
+            request.method,
+            request.path,
+            response.status_code,
+            elapsed_ms,
+        )
+        return response
+
+    return middleware
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+**② 順路に置く**（`config/settings.py` の `MIDDLEWARE`。先頭に1行足す差分）
+
+```python
+MIDDLEWARE = [
+    "config.middleware.timing_middleware",  # 追加: 一番外側で全体の時間を測る
+    "django.middleware.security.SecurityMiddleware",
+    # （残りはそのまま）
+]
+```
+
+ここで叩いても、**計測の行はまだ出ません**（理由は 5-2）。
+
+✅ 検証済み: 200 は返るが、コンソールには SQL と `"GET /api/posts HTTP/1.1" 200 754` しか出ない
+
+**③ ロガーを出す設定**（`config/settings.py` の `LOGGING` に足す差分）
+
+```python
+LOGGING = {
+    # （"version" / "handlers" / "django.db.backends" はそのまま）
+    "loggers": {
+        "django.db.backends": {...},  # 既存の SQL ログ
+        # 追加: 自作ミドルウェアのログ。INFO 以上をコンソールに出す
+        "config.middleware": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
+```
+
+```bash
+SQL_LOG=0 uv run python manage.py runserver
+# 別のターミナルで
+curl -s -o /dev/null http://127.0.0.1:8000/api/posts
+curl -s -o /dev/null http://127.0.0.1:8000/api/posts/999
+curl -s -o /dev/null http://127.0.0.1:8000/nothing
+```
+
+```text
+GET /api/posts -> 200 (36.8 ms)
+[13/Oct/2026 13:12:44] "GET /api/posts HTTP/1.1" 200 754
+GET /api/posts/999 -> 404 (16.0 ms)
+Not Found: /api/posts/999
+[13/Oct/2026 13:12:44] "GET /api/posts/999 HTTP/1.1" 404 57
+GET /nothing -> 404 (2.5 ms)
+Not Found: /nothing
+[13/Oct/2026 13:12:44] "GET /nothing HTTP/1.1" 404 2499
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（ミリ秒は毎回変わる。`SQL_LOG=0` を外すと、SQL の行のすぐ後に計測の行が出る）
+
+### 5-2. 🔬 仕組み解剖
+
+| | `MIDDLEWARE`（自作） | `LOGGING` |
+| --- | --- | --- |
+| 正式名称 | middleware（関数で書く形） | logging configuration |
+| いつ・誰が | 起動時に Django が外側の関数を1回呼ぶ。中の関数はリクエストごと | 起動時に Django が読み、Python の `logging` に渡す |
+| TS での対応物 | Koa の `await next()` の前後に書くのと同じ形 | 対応物なし。`console.log` には出す・出さないの設定が無い |
+| なぜこの設計 | ビュー全部に計測を書かず、1か所で済む | 出す側（`logger.info`）と見せる側（`LOGGING`）を分ける |
+| 失敗すると | 名前の綴りを誤ると起動時に `ImportError`。`return response` を忘れると 500 | 設定が無いと `INFO` は黙って捨てられる（②で見た） |
+
+```text
+リクエスト
+  ↓ timing_middleware       start を記録
+  ↓ SecurityMiddleware
+  ↓ ……（残り6つ）
+  ↓ URL ルーティング → ビュー関数（list_posts）
+  ↑ ……（同じ順路を逆向きに戻る）
+  ↑ SecurityMiddleware
+  ↑ timing_middleware       経過時間をログに出す
+レスポンス
+```
+
+✅ 検証済み: Django 5.2.17（`/nothing` も計測された。URL ルーティングより手前で動くため）
+
+見てほしいのは、**行きは上から、帰りは下から**通る点です。
+
+②で出なかったのは、既定では `WARNING` 以上しか表示されないからです。
+
+### 5-3. 🐍 Python注
+
+> 🐍 **Python注**: `def` の中の `def` は、関数を作って返す書き方。中の関数は外の `get_response` を覚えている（TS のクロージャ）。
+> `__name__` は、今のファイルの名前（`"config.middleware"`）が入る変数。
+
+### 5-4. 解説 — なぜこう設計するか
+
+共通の処理をビューごとに書くと、書き忘れが出ます。CSRF の検査なども、既存のミドルウェアです。
+
+🧠 Django の考え方: 全員に共通の処理は、窓口の順路に置く。
+
+### 5-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: ミドルウェアは並び順に意味がある。計測は全体を包みたいので先頭に置く。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/http/middleware/#middleware-order-and-layering
+
+### 5-6. 🔮 予測 → 動作確認
+
+1. 存在しない URL `/nothing` でも、計測の行は出る？
+2. `uv run pytest -s` で、計測の行は出る？
+
+<details><summary>答え</summary>
+
+1. 出る（`404`）。ミドルウェアは URL ルーティングより手前で動く
+2. 出ない。`TestClient` はミドルウェアを通らない（1-12。検証済み）
+
+</details>
+
+### 5-7. ✅ 想起チェック
+
+1. `get_response(request)` より前の行と後の行は、それぞれいつ動く？
+2. 外側の `timing_middleware` 自体は、何回呼ばれる？
+
+<details><summary>答え</summary>
+
+1. 前はビューより先（行き）。後はレスポンスができたあと（帰り）
+2. 起動時に1回だけ。リクエストごとに動くのは中の `middleware`
+
+</details>
+
+### 5-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **共通の処理は `get_response` の前後に書き、`MIDDLEWARE` に並べる。**
+
+📒 用語集に追記: ミドルウェア / ロガー / ログレベル
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ6` — JWT でログイン

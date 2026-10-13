@@ -53,3 +53,6 @@
 | つなぎの台帳 | 中間テーブル（through table） | 多対多の組（`post_id` と `tag_id`）を並べる台帳。`blog_post_tags` など。Django が自動で作る | 第2部-3 |
 | N+1 問題 | N+1 query problem | 一覧の SQL 1本のあと、1件ごとに関連データを取りに行き、SQL が「1 + 件数」本になること | 第2部-4 |
 | JOIN | JOIN | 2つの台帳を、つなぐ列（`category_id` など）で横に並べて1つの結果にする SQL | 第2部-4 |
+| ミドルウェア | middleware | 窓口の順路に置かれた共通の検査。全リクエストが行きと帰りに通る。`MIDDLEWARE` の並び順に通る | 第2部-5 |
+| ロガー | logger | ログを書き込む名前付きの出し口（`logging.getLogger(__name__)`）。どこまで画面に出すかは `LOGGING` で決める | 第2部-5 |
+| ログレベル | log level | ログの重要度（`DEBUG` < `INFO` < `WARNING` < `ERROR`）。既定では `WARNING` 以上しか表示されない | 第2部-5 |
