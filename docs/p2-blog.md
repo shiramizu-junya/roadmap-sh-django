@@ -1095,3 +1095,261 @@ Not Found: /nothing
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ6` — JWT でログイン
+
+---
+
+## 第2部-6: JWT でログイン
+
+**❓ この回の問い**: 2-5 で全リクエストを見張れた。では、リクエストが「誰から」来たかはどう分かる？
+
+**作るもの**: ユーザー名とパスワードで、JWT（身分証）を返すログイン API
+**重要度**: 🔴 毎日使う — API のログインは、ほぼこの形
+**前ステップとの接続**: `accounts/api.py` を作り、2-1 と同じく差し込む
+
+### 6-0. このステップの初出
+
+**Django / Ninja**: `authenticate()`, `RefreshToken`（django-ninja-jwt） / **Python**: `try` / `except`
+
+> 🧒 **かみくだくと**: **JWT**（JSON Web Token）は、`user_id` とサーバの署名が付いた**身分証**。署名を確かめれば、台帳を見ずに本物と分かる。
+> **アクセストークン**は身分証そのもの（5分）。**リフレッシュトークン**は新しい身分証との**引換券**（1日）。
+
+### 6-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① ライブラリを入れる**
+
+```bash
+uv add django-ninja-jwt
+```
+
+✅ 検証済み: django-ninja-jwt 5.4.5（依存として django-ninja-extra 0.31.7 と PyJWT 2.15.1 も入る。`INSTALLED_APPS` への追加は不要）
+
+**② ログイン API**（`accounts/api.py` 新規・全文）
+
+```python
+from django.contrib.auth import authenticate
+from django.http import HttpRequest
+from ninja import Router, Schema, Status
+from ninja_jwt.exceptions import TokenError
+from ninja_jwt.tokens import RefreshToken
+
+# ログインまわりの API 一式。URL の頭（/auth）は config/api.py で決める
+router = Router()
+
+
+class LoginIn(Schema):
+    username: str
+    password: str
+
+
+class TokenOut(Schema):
+    access: str  # 身分証。API を呼ぶたびに見せる（有効期限が短い）
+    refresh: str  # 身分証の引換券。access が切れたら新しいものと交換する
+
+
+class RefreshIn(Schema):
+    refresh: str
+
+
+class AccessOut(Schema):
+    access: str
+
+
+class ErrorOut(Schema):
+    detail: str
+
+
+@router.post("/login", response={200: TokenOut, 401: ErrorOut})
+def login(request: HttpRequest, payload: LoginIn):
+    # ユーザー名とパスワードが合えば User、合わなければ None が返る
+    user = authenticate(request, username=payload.username, password=payload.password)
+    if user is None:
+        return Status(401, {"detail": "ユーザー名かパスワードが違います"})
+    # 引換券を作る（中に user_id が入る）
+    # ignore: ライブラリの型注釈の誤り（cls: T）で mypy が怒るのを黙らせる。動きは正しい
+    refresh = RefreshToken.for_user(user)  # type: ignore[misc]
+    return {"access": str(refresh.access_token), "refresh": str(refresh)}
+
+
+@router.post("/refresh", response={200: AccessOut, 401: ErrorOut})
+def refresh(request: HttpRequest, payload: RefreshIn):
+    try:
+        token = RefreshToken(payload.refresh)  # 署名と有効期限をここで確かめる
+    except TokenError:
+        return Status(401, {"detail": "引換券が無効か、期限切れです"})
+    return {"access": str(token.access_token)}
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / django-ninja-jwt 5.4.5（ruff・mypy も通過）
+
+**③ 差し込む**（`config/api.py` の差分）
+
+```python
+from accounts.api import router as auth_router  # 追加
+from blog.api import router as posts_router
+
+# （api = NinjaAPI() と posts の add_router はそのまま）
+api.add_router("/auth", auth_router, tags=["auth"])  # 追加
+```
+
+✅ 検証済み: Swagger UI（`/api/docs`）に `auth` の2本が増える
+
+**④ ログインして、身分証を読む**（名前とパスワードは自分の管理者ユーザーに置き換える）
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "password": "pass1234"}' | uv run python -m json.tool
+```
+
+```text
+{
+    "access": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNz...EkcpWrr-26YVjraQIBovh5TdeXwLphTflFYkTsjPUyY",
+    "refresh": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVz...K_l_U-h1DF_zWMmCsNmC47AvgPTrCVhHDFbt0JuChQY"
+}
+```
+
+✅ 検証済み: MySQL 8.4.11（長いので途中を `...` で省略。値は毎回変わる）
+
+`.` で区切った真ん中が中身です。暗号化されておらず、だれでも読めます。
+
+```bash
+uv run python -c "import base64, json, sys; body = sys.argv[1].split('.')[1]; print(json.loads(base64.urlsafe_b64decode(body + '==')))" "<access の値>"
+```
+
+```text
+{'token_type': 'access', 'exp': 1791898367, 'iat': 1791898067, 'jti': '92082b76ab4e40759c8cc83775b9ff00', 'user_id': 1}
+```
+
+✅ 検証済み: `exp`（期限）−`iat`（発行時刻）＝300秒＝5分。refresh 側は 86400秒＝1日
+
+**⑤ テスト**（`tests/test_auth.py` 新規・全文。`# TODO` の下は先に自分で書く）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_login_returns_tokens() -> None:
+    User.objects.create_user(username="alice", password="pass1234")
+    res = client.post("/auth/login", json={"username": "alice", "password": "pass1234"})
+    # TODO: 200 で、access と refresh の両方が返ること
+    assert res.status_code == 200
+    assert set(res.json()) == {"access", "refresh"}
+
+
+@pytest.mark.django_db
+def test_wrong_password_is_401() -> None:
+    User.objects.create_user(username="alice", password="pass1234")
+    res = client.post("/auth/login", json={"username": "alice", "password": "wrong"})
+    # TODO: 401 で、トークンを返さないこと
+    assert res.status_code == 401
+    assert "access" not in res.json()
+
+
+@pytest.mark.django_db
+def test_refresh_gives_new_access() -> None:
+    User.objects.create_user(username="alice", password="pass1234")
+    tokens = client.post("/auth/login", json={"username": "alice", "password": "pass1234"}).json()
+    # TODO: refresh を渡すと 200。access を渡すと 401（種類が違う）
+    assert client.post("/auth/refresh", json={"refresh": tokens["refresh"]}).status_code == 200
+    assert client.post("/auth/refresh", json={"refresh": tokens["access"]}).status_code == 401
+```
+
+✅ 検証済み: pytest-django 4.14.0（`14 passed`。ruff・mypy も通過）
+
+### 6-2. 🔬 仕組み解剖
+
+| | `authenticate()` | `RefreshToken` |
+| --- | --- | --- |
+| 正式名称 | `django.contrib.auth.authenticate()` | `ninja_jwt.tokens.RefreshToken` |
+| いつ・誰が | リクエストごと。Django がユーザー名で User を引き、パスワードのハッシュを照合する | `for_user()` で作り、`SECRET_KEY` で署名する。`RefreshToken(文字列)` で署名と期限を確かめる |
+| 発行される SQL | `SELECT ... FROM accounts_user WHERE username = 'alice' LIMIT 21` の1本 | **0本**。台帳を見ない |
+| TS での対応物 | 対応物なし。Node では bcrypt などで照合を自分で組む | jsonwebtoken の `jwt.sign()` / `jwt.verify()` |
+| なぜこの設計 | パスワード照合を各自で書かせない | サーバが「誰がログイン中か」を覚えなくて済む |
+| 失敗すると | 例外ではなく `None` が返る。401 は自分で返す | 改ざん・期限切れ・種類違いで `TokenError`（④の後で確認。3つとも 401） |
+
+✅ 検証済み: Django 5.2.17 / django-ninja-jwt 5.4.5（SQL の本数は `CaptureQueriesContext` で数えた）
+
+```text
+① POST /api/auth/login    {username, password}
+     → authenticate() で照合（SQL 1本）
+     ← {access, refresh}
+② API を呼ぶたびに access を見せる   … 2-7 で使う
+③ access が切れたら（5分）
+   POST /api/auth/refresh  {refresh}
+     ← {access}（新しい身分証。SQL 0本）
+④ refresh も切れたら（1日） → ① からやり直す
+```
+
+見てほしいのは、**台帳を見るのは①だけ**という点です。
+
+**セッション認証との比較**（1-4 の回収）。管理画面は今もセッション認証で動いています。
+
+| | セッション認証（管理画面） | JWT（この API） |
+| --- | --- | --- |
+| サーバが状態を持つか | 持つ。`django_session` に1行増える | 持たない。行は増えない |
+| どこで運ぶか | Cookie（`sessionid`） | ヘッダ（`Authorization: Bearer ...`） |
+| 即時ログアウト | できる（行を消す） | できない。期限まで有効 |
+| CSRF 対策 | 要る。ブラウザが Cookie を自動で送るため | 要らない。ヘッダは自動で付かないため |
+
+✅ 検証済み: ログイン API の後は `django_session` が0件のまま。管理画面にログインすると1件になり、`sessionid` の Cookie が届いた
+
+### 6-3. 🐍 Python注
+
+> 🐍 **Python注**: `try:` / `except TokenError:` は TS の `try` / `catch`。捕まえる例外を種類で選ぶ。
+> `set(...)` は、順番を無視して中身だけ比べるため。
+
+### 6-4. 解説 — なぜこう設計するか
+
+JWT ならサーバを何台に増やしても、同じ身分証が通ります。そのかわり、配った身分証は取り消せません。だから期限を短くして、引換券で交換させます。
+
+🧠 Django の考え方: 照合は Django、身分証はライブラリに任せる。
+
+### 6-5. 🔓 教材用の簡略化
+
+> 🔓 **教材用の簡略化**: 期限は既定のまま（access 5分 / refresh 1日）。引換券は何度でも使える。
+> **本番では**: 使った引換券を無効にする（`ROTATE_REFRESH_TOKENS` など）。署名の鍵も `SIGNING_KEY` で分ける。
+> 根拠: https://eadwincode.github.io/django-ninja-jwt/settings/
+
+### 6-6. 🔮 予測 → 動作確認
+
+1. runserver のログ（2-5）で、`/login` と `/refresh` はどちらが遅い？
+
+<details><summary>答え</summary>
+
+1. `/login`。検証では 692.7 ms と 0.4 ms。パスワードのハッシュ照合は、総当たりを防ぐためにわざと遅い（根拠: https://docs.djangoproject.com/en/5.2/topics/auth/passwords/）
+
+</details>
+
+### 6-7. ✅ 想起チェック
+
+1. JWT のログインで、サーバの台帳に増える行は？
+2. パスワードが違うと、`authenticate()` は何を返す？
+
+<details><summary>答え</summary>
+
+1. 無い（セッション認証なら `django_session` に1行）
+2. `None`。401 は自分で返す
+
+</details>
+
+### 6-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`authenticate()` で照合し、合えば `RefreshToken.for_user()` で身分証を渡す。**
+
+📒 用語集に追記: JWT / アクセストークン / リフレッシュトークン / セッション認証
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ7` — 認証と権限

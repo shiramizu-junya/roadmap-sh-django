@@ -56,3 +56,7 @@
 | ミドルウェア | middleware | 窓口の順路に置かれた共通の検査。全リクエストが行きと帰りに通る。`MIDDLEWARE` の並び順に通る | 第2部-5 |
 | ロガー | logger | ログを書き込む名前付きの出し口（`logging.getLogger(__name__)`）。どこまで画面に出すかは `LOGGING` で決める | 第2部-5 |
 | ログレベル | log level | ログの重要度（`DEBUG` < `INFO` < `WARNING` < `ERROR`）。既定では `WARNING` 以上しか表示されない | 第2部-5 |
+| JWT | JSON Web Token | 窓口が発行する身分証。`user_id` と期限が書かれ、サーバの署名が付く。中身はだれでも読めるが、書き換えると署名が合わなくなる | 第2部-6 |
+| アクセストークン | access token | 身分証そのもの。API を呼ぶたびに見せる。期限が短い（既定5分） | 第2部-6 |
+| リフレッシュトークン | refresh token | 新しいアクセストークンとの引換券。期限が長い（既定1日） | 第2部-6 |
+| セッション認証 | session authentication | ログイン中の人をサーバが `django_session` に覚え、Cookie の `sessionid` で照らし合わせる方式。管理画面が使う | 第2部-6 |
