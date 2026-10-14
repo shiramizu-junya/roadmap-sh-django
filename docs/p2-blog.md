@@ -1214,9 +1214,17 @@ curl -s -X POST http://127.0.0.1:8000/api/auth/login \
 ✅ 検証済み: MySQL 8.4.11（長いので途中を `...` で省略。値は毎回変わる）
 
 `.` で区切った真ん中が中身です。暗号化されておらず、だれでも読めます。
+access の値を変数 `ACCESS` に入れてから読みます（2-7 でもこの変数を使います）。
 
 ```bash
-uv run python -c "import base64, json, sys; body = sys.argv[1].split('.')[1]; print(json.loads(base64.urlsafe_b64decode(body + '==')))" "<access の値>"
+# ログインして、access の値だけを変数 ACCESS に入れる
+ACCESS=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "password": "pass1234"}' \
+  | uv run python -c "import json, sys; print(json.load(sys.stdin)['access'])")
+
+# 真ん中（中身）を取り出して読む
+uv run python -c "import base64, json, sys; body = sys.argv[1].split('.')[1]; print(json.loads(base64.urlsafe_b64decode(body + '==')))" "$ACCESS"
 ```
 
 ```text
@@ -1353,3 +1361,306 @@ JWT ならサーバを何台に増やしても、同じ身分証が通ります�
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ7` — 認証と権限
+
+---
+
+## 第2部-7: 認証と権限
+
+**❓ この回の問い**: 2-6 で身分証を発行できた。では、記事の API で身分証を確かめるには？
+
+**作るもの**: 作成は要ログイン（401）。更新・削除は自分の記事だけ（403）
+**重要度**: 🔴 毎日使う — 書き込む API には、ほぼ必ず付ける
+**前ステップとの接続**: 2-6 の access を、記事の API で確かめる
+
+### 7-0. このステップの初出
+
+**Django / Ninja**: `JWTAuth`（`auth=`）, `HttpError` / **Python**: `raise`, `@pytest.fixture`
+
+> 🧒 **かみくだくと**: **認証**は「誰か」を身分証で確かめること。失敗は **401**。
+> **認可**（権限）は「その人がしてよいか」を決めること。失敗は **403**。
+
+### 7-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 記事に「書いた人」を足す**（`blog/models.py` の差分）
+
+```python
+from django.conf import settings  # 追加（ファイルの先頭）
+from django.db import models
+
+
+class Post(models.Model):
+    # （既存の項目はそのまま。tags の下に追加）
+    # 多対一: 記事を書いた人。ユーザーを消すと、その人の記事も消える
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,  # accounts.User を指す（1-2 の設定）
+        on_delete=models.CASCADE,
+        null=True,  # 既存の記事には書いた人がいないので、空を許す
+        blank=True,
+    )
+```
+
+```bash
+uv run python manage.py makemigrations blog
+SQL_LOG=0 uv run python manage.py sqlmigrate blog 0004
+uv run python manage.py migrate
+```
+
+```sql
+ALTER TABLE `blog_post` ADD COLUMN `author_id` bigint NULL , ADD CONSTRAINT `blog_post_author_id_dd7a8485_fk_accounts_user_id` FOREIGN KEY (`author_id`) REFERENCES `accounts_user`(`id`);
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（制約名の末尾は環境で変わる）
+
+**② 記事の API に身分証の確認を付ける**（`blog/api.py` の差分）
+
+```python
+from ninja.errors import HttpError  # 追加
+from ninja_jwt.authentication import JWTAuth  # 追加
+
+
+class PostOut(Schema):
+    # （既存の項目はそのまま。category_id の下に追加）
+    author_id: int | None  # 書いた人の id（既存の記事は null）
+
+
+@router.post("", response={201: PostOut}, auth=JWTAuth())  # 身分証が無ければ 401
+def create_post(request: HttpRequest, payload: PostIn):
+    # （category と tags の部分はそのまま）
+    post = Post.objects.create(
+        title=payload.title,
+        body=payload.body,
+        category=category,
+        # 身分証の持ち主を、書いた人にする。author=request.user だと mypy が型違いを指摘する
+        author_id=request.user.id,
+    )
+    post.tags.set(tags)
+    return Status(201, post)
+
+
+@router.patch("/{post_id}", response=PostOut, auth=JWTAuth())
+def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事しか変更できません")
+    # （以下はそのまま）
+
+
+@router.delete("/{post_id}", response={204: None}, auth=JWTAuth())
+def delete_post(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事しか削除できません")
+    # （以下はそのまま）
+```
+
+✅ 検証済み: django-ninja 1.7.1 / django-ninja-jwt 5.4.5（ruff・mypy も通過）
+
+**③ 叩いてみる**（`ACCESS` は 2-6 ④の方法で入れておく）
+
+```bash
+# 身分証なし → 401
+curl -s -X POST http://127.0.0.1:8000/api/posts -H "Content-Type: application/json" -d '{"title": "t", "body": "b"}'
+# 身分証あり → 201。author_id が自分の id になる
+curl -s -X POST http://127.0.0.1:8000/api/posts -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS" -d '{"title": "自分の記事", "body": "b"}'
+# 書いた人のいない既存の記事（id は自分の環境のもの）→ 403
+curl -s -X PATCH http://127.0.0.1:8000/api/posts/2 -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS" -d '{"title": "x"}'
+```
+
+```text
+{"detail": "Unauthorized"}
+{"id": 4, "title": "自分の記事", "body": "b", ..., "author_id": 1, "tags": [], "category": null}
+{"detail": "自分の記事しか変更できません"}
+```
+
+✅ 検証済み: 401 / 201 / 403（日本語は `自...` の形で返る。1-5 と同じ）。`GET /api/posts` は身分証なしで 200 のまま
+
+```bash
+# 書いた人のいない既存の記事に、自分を入れる（任意。1回だけ。ユーザー名は自分のものに）
+uv run python manage.py shell -c "from accounts.models import User; from blog.models import Post; print(Post.objects.filter(author=None).update(author=User.objects.get(username='alice')))"
+```
+
+```sql
+UPDATE `blog_post` SET `author_id` = 1 WHERE `blog_post`.`author_id` IS NULL
+```
+
+✅ 検証済み: 最後に更新した行数が出る
+
+**④ テストに身分証を持たせる**（`tests/conftest.py` 新規・全文）
+
+```python
+import pytest
+from ninja_jwt.tokens import RefreshToken
+
+from accounts.models import User
+
+
+@pytest.fixture
+def user(db) -> User:
+    # ログインしている人。引数に user と書いたテストに渡される
+    return User.objects.create_user(username="alice", password="pass1234")
+
+
+@pytest.fixture
+def auth_headers(user: User) -> dict[str, str]:
+    # user の身分証を、リクエストのヘッダの形にする
+    token = RefreshToken.for_user(user).access_token  # type: ignore[misc]
+    return {"Authorization": f"Bearer {token}"}
+```
+
+✅ 検証済み: pytest-django 4.14.0
+
+**⑤ 既存のテストを直す**
+
+②のあと、既存のテストが 401 / 403 で落ちます。引数に `auth_headers`（記事を作るなら `user` も）を足し、`headers=` と `author=` を渡して直します。
+
+<details><summary>解答例（test_posts_api.py の差分。test_categories.py・test_tags.py も同じ形）</summary>
+
+```diff
+# 長すぎる行は uv run ruff format tests で折り返す
++from accounts.models import User
+ from blog.models import Post
+
+-def test_create_and_get_post() -> None:
+-    res = client.post("/posts", json={"title": "テスト", "body": "本文"})
++def test_create_and_get_post(auth_headers: dict[str, str]) -> None:
++    res = client.post("/posts", json={"title": "テスト", "body": "本文"}, headers=auth_headers)
+
+-def test_update_changes_only_sent_fields() -> None:
+-    post = Post.objects.create(title="元の題名", body="元の本文")
+-    res = client.patch(f"/posts/{post.id}", json={"title": "新しい題名"})
++def test_update_changes_only_sent_fields(user: User, auth_headers: dict[str, str]) -> None:
++    post = Post.objects.create(title="元の題名", body="元の本文", author=user)
++    res = client.patch(f"/posts/{post.id}", json={"title": "新しい題名"}, headers=auth_headers)
+```
+
+</details>
+
+✅ 検証済み: 直したあと `ruff format` を通して全件成功
+
+**⑥ 権限のテスト**（`tests/test_permissions.py` 新規・全文）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Post
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_create_without_token_is_401() -> None:
+    res = client.post("/posts", json={"title": "t", "body": "b"})
+    # TODO: 401 で、記事が保存されていないこと
+    assert res.status_code == 401
+    assert Post.objects.count() == 0
+
+
+def test_create_sets_author(user: User, auth_headers: dict[str, str]) -> None:
+    res = client.post("/posts", json={"title": "t", "body": "b"}, headers=auth_headers)
+    # TODO: 応答の author_id が、ログインしている人の id であること
+    assert res.json()["author_id"] == user.id
+
+
+def test_cannot_change_others_post(auth_headers: dict[str, str]) -> None:
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    post = Post.objects.create(title="bob の記事", body="b", author=bob)
+    # TODO: alice（auth_headers）が bob の記事を変更・削除すると 403。記事はそのまま
+    res = client.patch(f"/posts/{post.id}", json={"title": "乗っ取り"}, headers=auth_headers)
+    assert res.status_code == 403
+    assert client.delete(f"/posts/{post.id}", headers=auth_headers).status_code == 403
+    assert Post.objects.get(id=post.id).title == "bob の記事"
+```
+
+✅ 検証済み: pytest-django 4.14.0（`17 passed`。ruff・mypy も通過）
+
+### 7-2. 🔬 仕組み解剖
+
+| | `JWTAuth`（`auth=`） | `HttpError` |
+| --- | --- | --- |
+| 正式名称 | Ninja の認証（`auth=`）に渡す、django-ninja-jwt の Bearer 認証クラス | `ninja.errors.HttpError` |
+| いつ・誰が | リクエストごと。**ビュー関数より前に** Ninja が呼ぶ。署名と期限を確かめ、User を引いて `request.user` に入れる | ビュー関数の中で `raise` した時点で処理を止める。Ninja が受け止めて応答を作る |
+| 発行される SQL | `SELECT ... FROM accounts_user WHERE id = 1 LIMIT 21` の1本（その人がまだ有効か確かめる） | なし |
+| TS での対応物 | Express で、ルートごとに認証ミドルウェアを挟む `app.post("/posts", requireAuth, handler)` | `throw new HttpError(403, ...)` を共通のエラーハンドラが受ける形 |
+| なぜこの設計 | 「誰か」の確認をビューから外し、宣言1つで付け外しできる | 失敗の応答の形（`{"detail": ...}`）をそろえる |
+| 失敗すると | ヘッダが無いと 401 `{"detail": "Unauthorized"}`。偽物・期限切れも 401 | 指定したコードと `{"detail": "<メッセージ>"}` |
+
+✅ 検証済み: Django 5.2.17 / django-ninja 1.7.1 / django-ninja-jwt 5.4.5
+
+```text
+PATCH /api/posts/1  （Authorization: Bearer <access>）
+  ↓ ミドルウェア（2-5）
+  ↓ URL ルーティング
+  ↓ auth=JWTAuth()   身分証が無い・偽物 ────→ 401（ビューは動かない）
+  ↓                  本物なら User を引く（SQL 1本）
+  ↓ update_post
+  ↓   記事が無い ─────────────────────→ 404
+  ↓   書いた人が違う（raise HttpError）─→ 403
+  ↓   本人
+  200
+```
+
+✅ 検証済み: 3つの分かれ道すべて（無い id 999 は、身分証ありで 404）
+
+見てほしいのは、**401 はビューの手前、403 はビューの中**で決まる点です。
+
+> 💡補足: 偽物の身分証の 401 は、`detail` が崩れた文字列になる（ライブラリの都合。401 自体は正しい）。
+
+### 7-3. 🐍 Python注
+
+> 🐍 **Python注**: `raise` は例外を投げて、その場で処理を止める（TS の `throw`）。
+> `@pytest.fixture` を付けた関数は、テストの引数に同じ名前を書くと、pytest が呼んで結果を渡す。
+
+### 7-4. 解説 — なぜこう設計するか
+
+認可をビューで書くのは、「誰の記事か」がデータを見ないと分からないからです。
+
+🧠 Django の考え方: 「誰か」は入口で、「してよいか」はデータを見てから。
+
+### 7-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: `auth=` は Router にも付けられ、配下の全 API に効く。外すには `auth=None`。
+> 根拠: https://django-ninja.dev/guide/authentication/#applying-auth-at-different-levels
+
+### 7-6. 🔮 予測 → 動作確認
+
+1. 身分証ありで、存在しない記事 `999` を PATCH すると？
+2. 他人の記事を PATCH して 403 になるまでに、SQL は何本？
+
+<details><summary>答え</summary>
+
+1. 404。所有者を確かめる前に `get_object_or_404` で止まる（検証済み）
+2. 2本。User と記事を1本ずつ（ログで確認済み）
+
+</details>
+
+### 7-7. ✅ 想起チェック
+
+1. 401 と 403 の違いは？
+2. `auth=JWTAuth()` が失敗したとき、ビュー関数は動く？
+
+<details><summary>答え</summary>
+
+1. 401 は誰か分からない。403 は誰かは分かったが許可がない
+2. 動かない。Ninja がビューの手前で 401 を返す
+
+</details>
+
+### 7-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **認証は `auth=` で入口に、認可はビューでデータを見て `HttpError(403)`。**
+
+📒 用語集に追記: 認証 / 認可 / 401 と 403 / フィクスチャ
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ8` — ユーザー登録とプロフィール（一対一）
