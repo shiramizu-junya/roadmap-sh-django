@@ -1428,7 +1428,11 @@ class PostOut(Schema):
 
 @router.post("", response={201: PostOut}, auth=JWTAuth())  # 身分証が無ければ 401
 def create_post(request: HttpRequest, payload: PostIn):
-    # （category と tags の部分はそのまま）
+    category = None
+    if payload.category_id is not None:
+        category = get_object_or_404(Category, id=payload.category_id)
+    # 無いタグが1つでもあれば 404（記事を作る前に確かめる）
+    tags = [get_object_or_404(Tag, id=tag_id) for tag_id in payload.tag_ids]
     post = Post.objects.create(
         title=payload.title,
         body=payload.body,
@@ -1513,6 +1517,8 @@ def auth_headers(user: User) -> dict[str, str]:
 ```
 
 ✅ 検証済み: pytest-django 4.14.0
+
+> 💡補足: プロジェクト直下にも `conftest.py` があると、mypy が `Duplicate module named "conftest"` で止まる。空の `tests/__init__.py` を作れば、`tests.conftest` という別の名前として区別される。
 
 **⑤ 既存のテストを直す**
 
