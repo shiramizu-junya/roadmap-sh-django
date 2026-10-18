@@ -9,17 +9,21 @@ client = TestClient(api)
 
 
 @pytest.mark.django_db
-def test_create_post_with_category() -> None:
+def test_create_post_with_category(auth_headers: dict[str, str]) -> None:
     category = Category.objects.create(name="日記")
-    res = client.post("/posts", json={"title": "t", "body": "b", "category_id": category.id})
+    res = client.post(
+        "/posts", json={"title": "t", "body": "b", "category_id": category.id}, headers=auth_headers
+    )
     # TODO: ステータスが 201 で、応答の category_id が category.id であること
     assert res.status_code == 201
     assert res.json()["category_id"] == category.id
 
 
 @pytest.mark.django_db
-def test_unknown_category_is_404() -> None:
-    res = client.post("/posts", json={"title": "t", "body": "b", "category_id": 999})
+def test_unknown_category_is_404(auth_headers: dict[str, str]) -> None:
+    res = client.post(
+        "/posts", json={"title": "t", "body": "b", "category_id": 999}, headers=auth_headers
+    )
     # TODO: ステータスが 404 で、記事が1件も保存されていないこと
     assert res.status_code == 404
     assert Post.objects.count() == 0

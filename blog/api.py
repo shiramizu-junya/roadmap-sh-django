@@ -3,6 +3,8 @@ from datetime import datetime
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
+from ninja.errors import HttpError
+from ninja_jwt.authentication import JWTAuth
 
 from .models import Category, Post, Tag
 
@@ -40,6 +42,7 @@ class PostOut(Schema):
     category_id: int | None
     tags: list[TagOut]  # 入れ子: 記事の中にタグの一覧を入れて返す
     category: CategoryOut | None  # 入れ子: カテゴリの名前も返す
+    author_id: int | None  # 書いた人の id（既存の記事は null）
 
 
 @router.get("", response=list[PostOut])
@@ -51,15 +54,21 @@ def list_posts(request: HttpRequest):
     )
 
 
-@router.post("", response={201: PostOut})
+@router.post("", response={201: PostOut}, auth=JWTAuth())  # 身分証が無ければ 401
 def create_post(request: HttpRequest, payload: PostIn):
     category = None
     if payload.category_id is not None:
         category = get_object_or_404(Category, id=payload.category_id)
     # 無いタグが1つでもあれば 404（記事を作る前に確かめる）
     tags = [get_object_or_404(Tag, id=tag_id) for tag_id in payload.tag_ids]
-    post = Post.objects.create(title=payload.title, body=payload.body, category=category)
-    post.tags.set(tags)  # つなぎの台帳（blog_post_tags）に行を入れる
+    post = Post.objects.create(
+        title=payload.title,
+        body=payload.body,
+        category=category,
+        # 身分証の持ち主を、書いた人にする。author=request.user だと mypy が型違いを指摘する
+        author_id=request.user.id,
+    )
+    post.tags.set(tags)
     return Status(201, post)
 
 
@@ -68,9 +77,11 @@ def get_post(request: HttpRequest, post_id: int):
     return get_object_or_404(Post, id=post_id)
 
 
-@router.patch("/{post_id}", response=PostOut)
+@router.patch("/{post_id}", response=PostOut, auth=JWTAuth())
 def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
     post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事しか変更できません")
     changes = payload.model_dump(exclude_unset=True, exclude_none=True)
     for name, value in changes.items():
         setattr(post, name, value)
@@ -78,8 +89,10 @@ def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
     return post
 
 
-@router.delete("/{post_id}", response={204: None})
+@router.delete("/{post_id}", response={204: None}, auth=JWTAuth())
 def delete_post(request: HttpRequest, post_id: int):
     post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事しか削除できません")
     post.delete()
     return Status(204, None)

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -29,6 +30,13 @@ class Post(models.Model):
     )
     # 多対多: 1つの記事に複数のタグ、1つのタグに複数の記事
     tags = models.ManyToManyField(Tag, blank=True)
+    # 多対一: 記事を書いた人。ユーザーを消すと、その人の記事も消える
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,  # accounts.User を指す（1-2 の設定）
+        on_delete=models.CASCADE,
+        null=True,  # 既存の記事には書いた人がいないので、空を許す
+        blank=True,
+    )
 
     def __str__(self) -> str:
         return self.title
