@@ -70,3 +70,8 @@
 | 自己参照 | recursive relationship（`ForeignKey("self")`） | 台帳の行が、同じ台帳の別の行を指すこと。返信は「どのコメントへの返信か」を `parent_id` で覚える | 第2部-9 |
 | `related_name` | related_name | 相手のモデルから逆向きにたどる入口の名前。`related_name="comments"` なら `post.comments` で引ける。付けないと `comment_set` | 第2部-9 |
 | `assert` | assert 文 | 「ここでは必ずこの条件が真」という宣言。偽なら `AssertionError` で止まる。mypy は宣言のあとの型を絞り込む | 第2部-9 |
+| メディアファイル | media files | 利用者が送ってきたファイル（画像など）。中身はディスクに置き、台帳には置き場所の文字列だけを書く | 第2部-10 |
+| `MEDIA_ROOT`・`MEDIA_URL` | MEDIA_ROOT / MEDIA_URL | `MEDIA_ROOT` はメディアファイルを置くフォルダ、`MEDIA_URL` はそれを配る URL の頭（`/media/`） | 第2部-10 |
+| `ImageField` | models.ImageField | 画像の置き場所を覚える列。DB では `varchar(100)` の文字列。Pillow が要る。モデルで保存するときは中身を確かめない | 第2部-10 |
+| `UploadedFile` | UploadedFile | 送られてきたファイル。`name`・`size`・`read()` などを持つ。Ninja では引数の型に書くと受け取れる | 第2部-10 |
+| multipart/form-data | multipart/form-data | 文字とファイルを区切り線で仕切って、1回で送る形式。`curl -F` やブラウザの `FormData` が使う | 第2部-10 |

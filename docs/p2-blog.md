@@ -2273,3 +2273,338 @@ blog_comment
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ10` — 画像アップロード
+
+---
+
+## 第2部-10: 画像アップロード
+
+**❓ この回の問い**: 2-9 までで、記事にいろいろな「文字」をぶら下げた。では、画像のような「ファイル」はどこに、どう置く？
+
+**作るもの**: 記事に画像を付ける `POST /api/posts/{post_id}/images`（1記事に何枚でも）
+**重要度**: 🔴 毎日使う — 画像・添付ファイルは、ほとんどの Web サービスにある
+**前ステップとの接続**: 2-9 の「記事にぶら下がる台帳」を、画像のために1つ足す
+
+### 10-0. このステップの初出
+
+**Django / Ninja**: `ImageField` と `MEDIA_ROOT`, `UploadedFile` / **Python**: `a, b = ...`（分割代入）
+
+> 🧒 **かみくだくと**: **メディアファイル**は、利用者が送ってきたファイル（画像など）のこと。
+> Django は、ファイルの中身を**ディスク**に置き、台帳には**置き場所の文字列だけ**を書く。
+
+### 10-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① Pillow を入れる**
+
+`ImageField` が画像を読むのに使う、Python の画像ライブラリです。
+
+```bash
+uv add pillow
+```
+
+✅ 検証済み: Pillow 13.0.0 が入る
+
+**② ファイルの置き場所を決める**
+
+`config/settings.py`（`STATIC_URL = "static/"` の下に追加）
+
+```python
+# アップロードされたファイルの置き場所と、それを配る URL の頭
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = "media/"
+```
+
+✅ 検証済み: Django 5.2.17
+
+`config/urls.py`（全文）
+
+```python
+from django.conf import settings
+from django.conf.urls.static import static
+from django.contrib import admin
+from django.urls import path
+
+from blog import views
+from config.api import api
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("manual/posts/", views.post_list),  # 1-5・1-6 の手書き版（比較用に残す）
+    path("api/", api.urls),  # Ninja の API 一式
+]
+
+# 開発中だけ、/media/ の URL でアップロードされたファイルを配る（DEBUG=False では何もしない）
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+```
+
+✅ 検証済み: `/media/posts/red.png` が `200 image/png` で返る
+
+`media/` は `.gitignore` 済みなので、画像は git に入りません。
+
+**③ PostImage を作る**（`blog/models.py` のファイルの最後に追加。既存のモデルは消さない）
+
+```python
+class PostImage(models.Model):
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="images")
+    # ファイルは MEDIA_ROOT/posts/ に置き、台帳にはパスの文字列だけを入れる
+    image = models.ImageField(upload_to="posts/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.image.name
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+`blog/admin.py`（全文。データを見るための窓に PostImage も足す）
+
+```python
+from django.contrib import admin
+
+from .models import Category, Comment, Post, PostImage, Tag
+
+# Post を管理画面に出す（見た目の調整はしない）
+admin.site.register(Post)
+admin.site.register(Category)
+admin.site.register(Tag)
+admin.site.register(Comment)
+admin.site.register(PostImage)
+```
+
+✅ 検証済み: 管理画面に Post images が出る
+
+```bash
+uv run python manage.py makemigrations blog
+SQL_LOG=0 uv run python manage.py sqlmigrate blog 0006
+uv run python manage.py migrate
+```
+
+```sql
+CREATE TABLE `blog_postimage` (`id` bigint AUTO_INCREMENT NOT NULL PRIMARY KEY, `image` varchar(100) NOT NULL, `created_at` datetime(6) NOT NULL, `post_id` bigint NOT NULL);
+ALTER TABLE `blog_postimage` ADD CONSTRAINT `blog_postimage_post_id_09cc1915_fk_blog_post_id` FOREIGN KEY (`post_id`) REFERENCES `blog_post` (`id`);
+```
+
+✅ 検証済み: MySQL 8.4.11（制約名の末尾は環境で変わる）
+
+見てほしいのは `image varchar(100)` です。画像の列なのに、ただの**文字列**の列です。
+
+**④ 画像を受け取る API**（`blog/api.py`。import を3行置き換え、ファイルの最後に追加）
+
+import の3行（それぞれ、この形に置き換える。1行目は新しく足す）
+
+```python
+from django.core.files.images import get_image_dimensions
+```
+
+```python
+from ninja import Field, Router, Schema, Status, UploadedFile
+```
+
+```python
+from .models import Category, Comment, Post, PostImage, Tag
+```
+
+✅ 検証済み: ruff の import 順チェックも通過（1行目は `from django.http import HttpRequest` の上に置く）
+
+ファイルの最後（list_comments の下）に追加
+
+```python
+class PostImageOut(Schema):
+    id: int
+    url: str = Field(alias="image.url")  # 保存したファイルを見に行く URL
+
+
+@router.post("/{post_id}/images", response={201: PostImageOut}, auth=JWTAuth())
+def upload_image(request: HttpRequest, post_id: int, file: UploadedFile):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事にしか画像を付けられません")
+    # 大きすぎるファイルは断る（size は不明のとき None になりうる）
+    if file.size is None or file.size > 2 * 1024 * 1024:
+        raise HttpError(400, "画像は 2MB までです")
+    # Pillow で中身を読んで、本当に画像か確かめる（画像でなければ幅と高さが None）
+    width, _ = get_image_dimensions(file)
+    if width is None:
+        raise HttpError(400, "画像ファイルを送ってください")
+    post_image = PostImage.objects.create(post=post, image=file)
+    return Status(201, post_image)
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+**⑤ 叩いてみる**（`ACCESS` は 2-6 ④の方法で、直前に入れ直す。記事の id は自分の記事のもの）
+
+```bash
+# 試し用の赤い四角の画像を作る（64x64 の PNG）
+uv run python -c "from PIL import Image; Image.new('RGB', (64, 64), 'red').save('red.png')"
+# -F は「ファイルを添えて送る」。file= は upload_image の引数の名前と揃える
+curl -s -X POST http://127.0.0.1:8000/api/posts/1/images \
+  -H "Authorization: Bearer $ACCESS" -F "file=@red.png"
+```
+
+```text
+{"id": 1, "url": "/media/posts/red.png"}
+```
+
+✅ 検証済み: 201。画像でないファイルは 400、他人の記事は 403、身分証なしは 401、2MB 超は 400
+
+`http://127.0.0.1:8000/media/posts/red.png` をブラウザで開くと、赤い四角が見えます。
+
+**⑥ テスト**（`tests/test_images.py` 新規）
+
+要件だけ書きます。使う道具: `SimpleUploadedFile(名前, バイト列)`（テスト用のファイル）、`client.post(url, FILES={"file": ...})`、`settings` フィクスチャ（そのテストの間だけ設定を変える）、`tmp_path`（使い捨てのフォルダ）。
+
+1. PNG を送ると 201 で、`url` が `/media/posts/red.png`。ファイルもできている
+2. 画像でないファイルは 400 で、PostImage は増えない
+3. 他人の記事に送ると 403
+4. ファイルは本物の `media/` ではなく `tmp_path` に置く
+
+<details><summary>解答例</summary>
+
+```python
+import io
+from pathlib import Path
+
+import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
+from ninja.testing import TestClient
+from PIL import Image
+
+from accounts.models import User
+from blog.models import Post, PostImage
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.fixture(autouse=True)
+def media_in_tmp(settings, tmp_path: Path) -> None:
+    # テストで保存するファイルは、使い捨てのフォルダに置く（本物の media/ を汚さない）
+    settings.MEDIA_ROOT = tmp_path
+
+
+def png_file(name: str = "red.png") -> SimpleUploadedFile:
+    # Pillow で 1x1 の PNG を作り、アップロードされたファイルの形にする
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), "red").save(buf, "PNG")
+    return SimpleUploadedFile(name, buf.getvalue(), content_type="image/png")
+
+
+def test_upload_saves_file(user: User, auth_headers: dict[str, str], tmp_path: Path) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    res = client.post(f"/posts/{post.id}/images", FILES={"file": png_file()}, headers=auth_headers)
+    assert res.status_code == 201
+    assert res.json()["url"] == "/media/posts/red.png"
+    assert (tmp_path / "posts" / "red.png").exists()  # ファイルが MEDIA_ROOT に置かれた
+
+
+def test_not_image_is_400(user: User, auth_headers: dict[str, str]) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    fake = SimpleUploadedFile("fake.png", b"hello", content_type="image/png")
+    res = client.post(f"/posts/{post.id}/images", FILES={"file": fake}, headers=auth_headers)
+    assert res.status_code == 400
+    assert PostImage.objects.count() == 0
+
+
+def test_other_users_post_is_403(auth_headers: dict[str, str]) -> None:
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    post = Post.objects.create(title="t", body="b", author=bob)
+    res = client.post(f"/posts/{post.id}/images", FILES={"file": png_file()}, headers=auth_headers)
+    assert res.status_code == 403
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`28 passed`。ruff・mypy も通過）
+
+> 💡補足: `autouse=True` のフィクスチャは、引数に書かなくても、このファイルの全テストで使われる。
+
+### 10-2. 🔬 仕組み解剖
+
+| | `ImageField` と `MEDIA_ROOT` | `UploadedFile` |
+| --- | --- | --- |
+| 正式名称 | `models.ImageField` / `settings.MEDIA_ROOT`・`MEDIA_URL` | `ninja.UploadedFile`（中身は Django の `UploadedFile`） |
+| いつ・誰が | 保存のときに Django が、ファイルを `MEDIA_ROOT/posts/` に書き、台帳にパスを INSERT する | リクエストごとに Django が、ファイル付きの送信を読み取る。Ninja は引数の名前（`file`）で取り出して渡す |
+| 発行される SQL | `INSERT INTO blog_postimage (post_id, image, created_at) VALUES (1, 'posts/red.png', ...)` | なし（ファイルはまだメモリか一時ファイルの中） |
+| TS での対応物 | 対応物なし（ファイルの置き場所まで面倒を見る ORM の機能） | ブラウザの `File`（`FormData` に入れて送るもの）を、受け取る側から見たもの |
+| なぜこの設計 | DB は大きなバイト列が苦手。中身はディスク、台帳は場所だけにすると、置き場所を後で入れ替えられる | ファイルを JSON の中に入れると大きく膨らむ。ファイルは別の送り方（下の 🧒）で受け取る |
+| 失敗すると | Pillow が無いと、起動時のチェックでエラー（`fields.E210`） | `file` を送らないと 422（`"msg": "Field required"`） |
+
+✅ 検証済み: Django 5.2.17（SQL は `CaptureQueriesContext` で確認。ほかに身分証の User と記事の SELECT が1本ずつ）
+
+> 🧒 **かみくだくと**: **multipart/form-data** は、文字とファイルを「区切り線」で仕切って、1回で送る形式。`curl -F` やブラウザの `FormData` がこの形で送る。
+
+```text
+curl -F "file=@red.png"
+        |
+        v
+  upload_image() --- writes the file --> media/posts/red.png      (disk)
+        |
+        +--- INSERT --> blog_postimage.image = 'posts/red.png'     (DB)
+
+browser: GET /media/posts/red.png --> static() reads the file on disk
+```
+
+✅ 検証済み: ⑤のあと `media/posts/red.png` ができ、台帳の `image` 列は `posts/red.png`
+
+見てほしいのは、行き先が**2つ**に分かれる点です。
+
+### 10-3. 🐍 Python注
+
+> 🐍 **Python注**: `width, _ = get_image_dimensions(file)` は分割代入。2つの値を順に受け取る（TS の `const [width, _] = ...`）。
+> `_` は「使わない値」の置き場という慣習。
+
+### 10-4. 解説 — なぜこう設計するか
+
+`ImageField` は、モデルで保存するときには中身を確かめません。画像の検査はフォーム（SSR の部品）の側にあるからです。そこで④では `get_image_dimensions` で自分で確かめています。外すと、文字だけのファイルも 201 で保存されます（検証済み）。
+
+🧠 Django の考え方: 中身はストレージ（ファイルの置き場所）、台帳には場所だけ。置き場所は設定で差し替える。
+
+### 10-5. ⚠️ アンチパターン ／ 🔓 教材用の簡略化
+
+> ⚠️ **アンチパターン**: 拡張子や `Content-Type` だけで「画像だ」と信じる。どちらも送る側が自由に書ける。中身を読み、大きさにも上限を付ける。
+> 根拠: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html#content-type-validation
+
+> 🔓 **教材用の簡略化**: 画像を、アプリと同じマシンの `media/` に置き、Django 自身が配っている。
+> **本番では**: ストレージを S3 などに差し替え、配るのは Web サーバや CDN に任せる。`static()` は `DEBUG=False` では何もしない。
+> 根拠: https://docs.djangoproject.com/en/5.2/howto/static-files/#serving-files-uploaded-by-a-user-during-development
+
+### 10-6. 🔮 予測 → 動作確認
+
+1. 同じ `red.png` をもう1回送ると、返ってくる `url` は？
+2. 画像を付けた記事を消すと、PostImage の行と、`media/` のファイルはどうなる？
+3. 画像を1枚送ると、SQL は何本？
+
+<details><summary>答え</summary>
+
+1. `/media/posts/red_n7ZMuoN.png` のように、`_` とランダムな7文字が付く。上書きを避けるため（検証済み）
+2. 行は CASCADE で消えるが、**ファイルは残る**（検証済み。根拠: https://docs.djangoproject.com/en/5.2/ref/models/fields/#django.db.models.fields.files.FieldFile.delete）
+3. 3本。身分証の User、記事、INSERT（検証済み）
+
+</details>
+
+### 10-7. ✅ 想起チェック
+
+1. `blog_postimage` の `image` 列には、何が入っている？
+2. `upload_to="posts/"` は、何を決めている？
+
+<details><summary>答え</summary>
+
+1. ファイルの置き場所を表す文字列（`posts/red.png`）。画像の中身は入っていない
+2. `MEDIA_ROOT` の中の、どのフォルダに置くか
+
+</details>
+
+### 10-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **ファイルの中身は `MEDIA_ROOT` の下に、台帳には場所の文字列だけ。画像かどうかは自分で確かめる。**
+
+📒 用語集に追記: メディアファイル / `MEDIA_ROOT`・`MEDIA_URL` / `ImageField` / `UploadedFile` / multipart/form-data
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ11` — 検索と絞り込み
