@@ -2189,6 +2189,8 @@ def test_deleting_parent_deletes_replies(user: User) -> None:
 
 ✅ 検証済み: pytest-django 4.14.0（`25 passed`。ruff・mypy も通過）
 
+> 💡補足: `@pytest.mark.django_db` が無くても DB を使えるのは、どのテストも `user` を受け取るから。conftest の `def user(db)` の `db` は pytest-django のフィクスチャで、マークと同じく DB を使えるようにする。`user` を受け取らないテストには、今までどおりマークが要る。
+
 ### 9-2. 🔬 仕組み解剖
 
 | | `ForeignKey("self")` | `related_name` |
