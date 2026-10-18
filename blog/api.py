@@ -6,7 +6,7 @@ from ninja import Field, Router, Schema, Status
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 
-from .models import Category, Post, Tag
+from .models import Category, Comment, Post, Tag
 
 # 記事の API 一式。URL の頭（/posts）は config/api.py で決める
 router = Router()
@@ -96,3 +96,43 @@ def delete_post(request: HttpRequest, post_id: int):
         raise HttpError(403, "自分の記事しか削除できません")
     post.delete()
     return Status(204, None)
+
+
+class CommentIn(Schema):
+    body: str = Field(min_length=1)
+    parent_id: int | None = None  # 返信なら返信先のコメントの id
+
+
+class ReplyOut(Schema):
+    id: int
+    author_id: int
+    body: str
+    created_at: datetime
+
+
+class CommentOut(ReplyOut):
+    replies: list[ReplyOut]  # 入れ子: このコメントへの返信
+
+
+@router.post("/{post_id}/comments", response={201: CommentOut}, auth=JWTAuth())
+def create_comment(request: HttpRequest, post_id: int, payload: CommentIn):
+    post = get_object_or_404(Post, id=post_id)
+    parent = None
+    if payload.parent_id is not None:
+        # 返信先は、同じ記事のコメントに限る（違う記事なら 404）
+        parent = get_object_or_404(Comment, id=payload.parent_id, post=post)
+        if parent.parent_id is not None:
+            raise HttpError(400, "返信には返信できません")
+    # JWTAuth を通ったので必ずログイン済み。mypy に「User だ」と伝える
+    assert request.user.is_authenticated
+    comment = Comment.objects.create(
+        post=post, author=request.user, parent=parent, body=payload.body
+    )
+    return Status(201, comment)
+
+
+@router.get("/{post_id}/comments", response=list[CommentOut])
+def list_comments(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    # post.comments: related_name で付けた、記事からコメントへの入口
+    return post.comments.filter(parent=None).prefetch_related("replies")

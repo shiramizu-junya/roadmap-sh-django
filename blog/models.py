@@ -40,3 +40,22 @@ class Post(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+
+class Comment(models.Model):
+    # related_name: 記事の側から post.comments で引けるようにする
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # 自己参照: 返信なら返信先のコメント。最初のコメントなら空
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,  # 親コメントを消すと、返信も消える
+        null=True,
+        blank=True,
+        related_name="replies",  # 親コメントから comment.replies で返信を引く
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.body[:20]
