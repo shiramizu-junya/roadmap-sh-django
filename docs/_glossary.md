@@ -67,3 +67,6 @@
 | 一対一 | one-to-one（`OneToOneField`） | 1人に1つだけのつながり。つなぐ列に `UNIQUE` が付いた外部キーになる。逆向きは `user.profile` で引ける | 第2部-8 |
 | ハッシュ | password hash | パスワードを決まった手順で崩した文字列。元には戻せない。照合は入力を同じ手順で崩して比べる | 第2部-8 |
 | `create_user()` | `UserManager.create_user()` | ユーザーを作る専用の命令。パスワードをハッシュにしてから保存する。`objects.create()` だと平文のまま入り、ログインできない | 第2部-8 |
+| 自己参照 | recursive relationship（`ForeignKey("self")`） | 台帳の行が、同じ台帳の別の行を指すこと。返信は「どのコメントへの返信か」を `parent_id` で覚える | 第2部-9 |
+| `related_name` | related_name | 相手のモデルから逆向きにたどる入口の名前。`related_name="comments"` なら `post.comments` で引ける。付けないと `comment_set` | 第2部-9 |
+| `assert` | assert 文 | 「ここでは必ずこの条件が真」という宣言。偽なら `AssertionError` で止まる。mypy は宣言のあとの型を絞り込む | 第2部-9 |

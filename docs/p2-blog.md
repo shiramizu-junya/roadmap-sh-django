@@ -1963,3 +1963,311 @@ accounts_user                accounts_profile
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ9` — コメントと返信（自己参照）
+
+---
+
+## 第2部-9: コメントと返信（自己参照）
+
+**❓ この回の問い**: 2-8 で、User と Profile を一対一でつないだ。では、同じ台帳の行どうしをつなぐには？
+
+**作るもの**: 記事へのコメントと、コメントへの返信（`/api/posts/{post_id}/comments`）
+**重要度**: 🟡 読めればよい — 自分で書く頻度は低いが、コメント・カテゴリの階層・組織図などで出会う
+**前ステップとの接続**: 2-2 の `ForeignKey` の行き先を、自分自身の台帳にする
+
+### 9-0. このステップの初出
+
+**Django / Ninja**: `ForeignKey("self")`, `related_name` / **Python**: `assert`
+
+> 🧒 **かみくだくと**: **自己参照**は、台帳の行が、同じ台帳の別の行を指すこと。
+> 返信は「どのコメントへの返信か」を、同じコメント台帳の `id` で覚える。
+
+### 9-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① Comment を作る**（`blog/models.py` のファイルの最後に追加。既存のモデルは消さない）
+
+```python
+class Comment(models.Model):
+    # related_name: 記事の側から post.comments で引けるようにする
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # 自己参照: 返信なら返信先のコメント。最初のコメントなら空
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,  # 親コメントを消すと、返信も消える
+        null=True,
+        blank=True,
+        related_name="replies",  # 親コメントから comment.replies で返信を引く
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.body[:20]
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+`blog/admin.py`（全文。データを見るための窓に Comment も足す）
+
+```python
+from django.contrib import admin
+
+from .models import Category, Comment, Post, Tag
+
+# Post を管理画面に出す（見た目の調整はしない）
+admin.site.register(Post)
+admin.site.register(Category)
+admin.site.register(Tag)
+admin.site.register(Comment)
+```
+
+✅ 検証済み: 管理画面に Comments が出る
+
+```bash
+uv run python manage.py makemigrations blog
+SQL_LOG=0 uv run python manage.py sqlmigrate blog 0005
+uv run python manage.py migrate
+```
+
+```sql
+CREATE TABLE `blog_comment` (`id` bigint AUTO_INCREMENT NOT NULL PRIMARY KEY, `body` longtext NOT NULL, `created_at` datetime(6) NOT NULL, `author_id` bigint NOT NULL, `parent_id` bigint NULL, `post_id` bigint NOT NULL);
+ALTER TABLE `blog_comment` ADD CONSTRAINT `blog_comment_parent_id_f2a027bb_fk_blog_comment_id` FOREIGN KEY (`parent_id`) REFERENCES `blog_comment` (`id`);
+-- （author_id と post_id の外部キー2本は省略）
+```
+
+✅ 検証済み: MySQL 8.4.11（制約名の末尾は環境で変わる）
+
+見てほしいのは `REFERENCES blog_comment` です。外部キーの行き先が、**自分と同じ台帳**になっています。
+
+**② コメントの API**（`blog/api.py`。import の1行を置き換え、ファイルの最後に追加）
+
+import の1行（この形に置き換える）
+
+```python
+from .models import Category, Comment, Post, Tag
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+ファイルの最後（delete_post の下）に追加
+
+```python
+class CommentIn(Schema):
+    body: str = Field(min_length=1)
+    parent_id: int | None = None  # 返信なら返信先のコメントの id
+
+
+class ReplyOut(Schema):
+    id: int
+    author_id: int
+    body: str
+    created_at: datetime
+
+
+class CommentOut(ReplyOut):
+    replies: list[ReplyOut]  # 入れ子: このコメントへの返信
+
+
+@router.post("/{post_id}/comments", response={201: CommentOut}, auth=JWTAuth())
+def create_comment(request: HttpRequest, post_id: int, payload: CommentIn):
+    post = get_object_or_404(Post, id=post_id)
+    parent = None
+    if payload.parent_id is not None:
+        # 返信先は、同じ記事のコメントに限る（違う記事なら 404）
+        parent = get_object_or_404(Comment, id=payload.parent_id, post=post)
+        if parent.parent_id is not None:
+            raise HttpError(400, "返信には返信できません")
+    # JWTAuth を通ったので必ずログイン済み。mypy に「User だ」と伝える
+    assert request.user.is_authenticated
+    comment = Comment.objects.create(
+        post=post, author=request.user, parent=parent, body=payload.body
+    )
+    return Status(201, comment)
+
+
+@router.get("/{post_id}/comments", response=list[CommentOut])
+def list_comments(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    # post.comments: related_name で付けた、記事からコメントへの入口
+    return post.comments.filter(parent=None).prefetch_related("replies")
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+**③ 叩いてみる**（`ACCESS` は 2-6 ④の方法で入れておく。記事の id は自分の環境のもの）
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/posts/1/comments -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS" -d '{"body": "最初のコメント"}'
+# 返信: parent_id に、上で返ってきた id を入れる
+curl -s -X POST http://127.0.0.1:8000/api/posts/1/comments -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS" -d '{"body": "返信です", "parent_id": 1}'
+curl -s http://127.0.0.1:8000/api/posts/1/comments
+```
+
+```text
+{"id": 1, "author_id": 1, "body": "最初のコメント", "created_at": "...", "replies": []}
+{"id": 2, "author_id": 1, "body": "返信です", "created_at": "...", "replies": []}
+[{"id": 1, ..., "replies": [{"id": 2, "author_id": 1, "body": "返信です", "created_at": "..."}]}]
+```
+
+✅ 検証済み: 201 / 201 / 200。返信の返信は 400、身分証なしは 401、無い記事は 404（日本語は `\u…` を直して表示）
+
+**④ テスト**（`tests/test_comments.py` 新規）
+
+フィクスチャは3回目なので、要件だけ書きます。先に自分で書いてから、解答例と比べてください。
+
+1. 最初のコメントと返信を作ると、一覧の一番上には最初のコメントだけが出て、返信は `replies` の中に入る
+2. 別の記事のコメントに返信しようとすると 404 で、コメントは増えない
+3. 返信に返信しようとすると 400
+4. 親コメントを消すと、返信も消える
+
+<details><summary>解答例</summary>
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Comment, Post
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_reply_is_nested(user: User, auth_headers: dict[str, str]) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    url = f"/posts/{post.id}/comments"
+    first = client.post(url, json={"body": "最初"}, headers=auth_headers).json()
+    client.post(url, json={"body": "返信", "parent_id": first["id"]}, headers=auth_headers)
+
+    res = client.get(url)
+    assert res.status_code == 200
+    assert len(res.json()) == 1  # 一覧の一番上には、最初のコメントだけ
+    assert res.json()[0]["replies"][0]["body"] == "返信"
+
+
+def test_reply_to_other_posts_comment_is_404(user: User, auth_headers: dict[str, str]) -> None:
+    post_a = Post.objects.create(title="a", body="b", author=user)
+    post_b = Post.objects.create(title="b", body="b", author=user)
+    other = Comment.objects.create(post=post_b, author=user, body="b の記事のコメント")
+
+    res = client.post(
+        f"/posts/{post_a.id}/comments",
+        json={"body": "x", "parent_id": other.id},
+        headers=auth_headers,
+    )
+    assert res.status_code == 404
+    assert Comment.objects.count() == 1
+
+
+def test_reply_to_reply_is_400(user: User, auth_headers: dict[str, str]) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    first = Comment.objects.create(post=post, author=user, body="最初")
+    reply = Comment.objects.create(post=post, author=user, parent=first, body="返信")
+
+    res = client.post(
+        f"/posts/{post.id}/comments",
+        json={"body": "返信の返信", "parent_id": reply.id},
+        headers=auth_headers,
+    )
+    assert res.status_code == 400
+
+
+def test_deleting_parent_deletes_replies(user: User) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    first = Comment.objects.create(post=post, author=user, body="最初")
+    Comment.objects.create(post=post, author=user, parent=first, body="返信")
+
+    first.delete()
+    assert Comment.objects.count() == 0
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`25 passed`。ruff・mypy も通過）
+
+### 9-2. 🔬 仕組み解剖
+
+| | `ForeignKey("self")` | `related_name` |
+| --- | --- | --- |
+| 正式名称 | 再帰的な関係（recursive relationship） | `ForeignKey(related_name=...)` |
+| いつ・誰が | マイグレーション時に、自分の台帳を指す外部キーになる | 起動時に、相手のモデルへ逆向きの入口（`post.comments`）を付け足す |
+| 発行される SQL | 親を消すと、返信を探して返信ごと DELETE する（下の図） | `post.comments.filter(parent=None)` → `WHERE post_id = 1 AND parent_id IS NULL` |
+| TS での対応物 | 対応物なし（ORM の機能） | 対応物なし（ORM の機能） |
+| なぜこの設計 | 返信の台帳を別に作らず、深さが変わっても同じ形で持てる | 既定の名前（`comment_set`）より読みやすい。逆向きの名前がぶつかるときにも使う |
+| 失敗すると | `"self"` を `Comment` と書くと、クラスがまだできていないので `NameError` | 同じ名前がぶつかると、起動時のチェックでエラー（`fields.E304`） |
+
+✅ 検証済み: Django 5.2.17（SQL は `CaptureQueriesContext` で確認）
+
+```text
+blog_comment
++----+---------+-----------+----------+
+| id | post_id | parent_id | body     |
++----+---------+-----------+----------+
+|  1 |       1 |      NULL | first    | <--+
+|  2 |       1 |         1 | reply    | ---+
+|  3 |       1 |      NULL | second   |
++----+---------+-----------+----------+
+```
+
+✅ 検証済み: ③の2件に、最初のコメントをもう1件足したときの台帳（body は英語に置き換えた）
+
+見てほしいのは、矢印が**同じ台帳の中で**折り返している点です。`parent_id` が NULL の行が、最初のコメントです。
+
+一覧の GET は SQL 3本です。記事を1本、最初のコメントを1本、`prefetch_related("replies")` で全部の返信を `WHERE parent_id IN (1, 3)` の1本で取ります（2-4 と同じ）。
+
+### 9-3. 🐍 Python注
+
+> 🐍 **Python注**: `assert 条件` は「ここでは必ず条件が真」という宣言。偽なら `AssertionError` で止まる。
+> mypy は、この宣言のあとの `request.user` を `User` として扱う。
+> `self.body[:20]` は、先頭の20文字を取り出す（TS の `body.slice(0, 20)`）。
+
+### 9-4. 解説 — なぜこう設計するか
+
+返信の深さを1段に絞ったのは、一覧の SQL を3本で止めるためです。深さに上限が無いと、段の数だけ SQL が増えます。
+
+🧠 Django の考え方: 関係の形はモデルで自由に持てる。どこまで許すかは API で決める。
+
+### 9-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 逆向きの入口には `related_name` で名前を付けておくと、`post.comments` のように読める。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/models/fields/#django.db.models.ForeignKey.related_name
+
+### 9-6. 🔮 予測 → 動作確認
+
+1. 返信が3件ある親コメントを消すと、何件消える？
+2. ②の `prefetch_related("replies")` を外すと、最初のコメントが10件のとき SQL は何本？
+
+<details><summary>答え</summary>
+
+1. 4件。返信も CASCADE で消える。Django は先に返信を探してから、まとめて DELETE する（検証済み）
+2. 12本。記事1本 + 最初のコメント1本 + 返信を10回（2-4 の N+1）
+
+</details>
+
+### 9-7. ✅ 想起チェック
+
+1. `ForeignKey("self")` の `"self"` は、何を指す？
+2. `related_name="replies"` を付けると、何ができるようになる？
+
+<details><summary>答え</summary>
+
+1. 定義しているモデル自身（ここでは Comment）
+2. 親コメントから `comment.replies.all()` で返信を引ける
+
+</details>
+
+### 9-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`ForeignKey("self")` で同じ台帳の行どうしをつなぎ、逆向きの名前は `related_name` で付ける。**
+
+📒 用語集に追記: 自己参照 / `related_name` / `assert`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ10` — 画像アップロード
