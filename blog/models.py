@@ -59,3 +59,13 @@ class Comment(models.Model):
 
     def __str__(self) -> str:
         return self.body[:20]
+
+
+class PostImage(models.Model):
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="images")
+    # ファイルは MEDIA_ROOT/posts/ に置き、台帳にはパスの文字列だけを入れる
+    image = models.ImageField(upload_to="posts/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return self.image.name

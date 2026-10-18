@@ -1,12 +1,13 @@
 from datetime import datetime
 
+from django.core.files.images import get_image_dimensions
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
-from ninja import Field, Router, Schema, Status
+from ninja import Field, Router, Schema, Status, UploadedFile
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 
-from .models import Category, Comment, Post, Tag
+from .models import Category, Comment, Post, PostImage, Tag
 
 # 記事の API 一式。URL の頭（/posts）は config/api.py で決める
 router = Router()
@@ -136,3 +137,24 @@ def list_comments(request: HttpRequest, post_id: int):
     post = get_object_or_404(Post, id=post_id)
     # post.comments: related_name で付けた、記事からコメントへの入口
     return post.comments.filter(parent=None).prefetch_related("replies")
+
+
+class PostImageOut(Schema):
+    id: int
+    url: str = Field(alias="image.url")  # 保存したファイルを見に行く URL
+
+
+@router.post("/{post_id}/images", response={201: PostImageOut}, auth=JWTAuth())
+def upload_image(request: HttpRequest, post_id: int, file: UploadedFile):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事にしか画像を付けられません")
+    # 大きすぎるファイルは断る（size は不明のとき None になりうる）
+    if file.size is None or file.size > 2 * 1024 * 1024:
+        raise HttpError(400, "画像は 2MB までです")
+    # Pillow で中身を読んで、本当に画像か確かめる（画像でなければ幅と高さが None）
+    width, _ = get_image_dimensions(file)
+    if width is None:
+        raise HttpError(400, "画像ファイルを送ってください")
+    post_image = PostImage.objects.create(post=post, image=file)
+    return Status(201, post_image)
