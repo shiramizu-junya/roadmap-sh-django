@@ -1670,3 +1670,296 @@ PATCH /api/posts/1  （Authorization: Bearer <access>）
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ8` — ユーザー登録とプロフィール（一対一）
+
+---
+
+## 第2部-8: ユーザー登録とプロフィール（一対一）
+
+**❓ この回の問い**: 2-7 で「ログインした人だけ」書き込めるようになった。では、そのユーザーはどうやって増やす？
+
+**作るもの**: 登録 API（`POST /api/auth/register`）と、自分のプロフィールを読み書きする API（`/api/auth/me`）
+**重要度**: 🔴 毎日使う — ユーザー登録と「User に情報を足す」設計は、ほぼどのアプリにも出る
+**前ステップとの接続**: 2-6 のログインの前に「登録」を足し、User に Profile を一対一でつなぐ
+
+### 8-0. このステップの初出
+
+**Django / Ninja**: `create_user()`, `OneToOneField` / **Python**: なし
+
+> 🧒 **かみくだくと**: **一対一**は「1人に、1つだけ」のつながり。
+> 住民台帳（User）とは別に、自己紹介の台帳（Profile）を作り、1人につき1行だけ書けるようにする。
+
+### 8-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① Profile を作る**（`accounts/models.py` 全文）
+
+```python
+# Create your models here.
+from django.conf import settings
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+
+
+class User(AbstractUser):
+    # 今は AbstractUser の項目をそのまま使う。項目を足すときはここに書く
+    pass
+
+
+class Profile(models.Model):
+    # 一対一: 1人のユーザーに、プロフィールは1つだけ
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    bio = models.TextField(blank=True)  # 自己紹介。空でもよい
+
+    def __str__(self) -> str:
+        return f"{self.user_id} のプロフィール"
+```
+
+```bash
+uv run python manage.py makemigrations accounts
+SQL_LOG=0 uv run python manage.py sqlmigrate accounts 0002
+uv run python manage.py migrate
+```
+
+```sql
+CREATE TABLE `accounts_profile` (`id` bigint AUTO_INCREMENT NOT NULL PRIMARY KEY, `bio` longtext NOT NULL, `user_id` bigint NOT NULL UNIQUE);
+ALTER TABLE `accounts_profile` ADD CONSTRAINT `accounts_profile_user_id_49a85d32_fk_accounts_user_id` FOREIGN KEY (`user_id`) REFERENCES `accounts_user` (`id`);
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / MySQL 8.4.11（制約名の末尾は環境で変わる）
+
+2-2 の `ForeignKey` との違いは、`user_id` の **`UNIQUE` だけ**です。
+
+**② 登録とプロフィールの API**（`accounts/api.py`。先頭の import を置き換え、ファイルの最後に追加。既存の login と refresh は消さない）
+
+先頭の import（この形に置き換える）
+
+```python
+from django.contrib.auth import authenticate
+from django.http import HttpRequest
+from django.shortcuts import get_object_or_404  # 追加
+from ninja import Field, Router, Schema, Status  # Field を追加
+from ninja_jwt.authentication import JWTAuth  # 追加
+from ninja_jwt.exceptions import TokenError
+from ninja_jwt.tokens import RefreshToken
+
+from .models import Profile, User  # 追加
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+ファイルの最後（refresh の下）に追加
+
+```python
+class RegisterIn(Schema):
+    username: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=8)  # 短すぎるパスワードは 422
+
+
+class UserOut(Schema):
+    id: int
+    username: str  # password は返さない（書かない項目は応答に出ない）
+
+
+class ProfileOut(Schema):
+    user_id: int
+    bio: str
+
+
+class ProfileIn(Schema):
+    bio: str
+
+
+@router.post("/register", response={201: UserOut, 409: ErrorOut})
+def register(request: HttpRequest, payload: RegisterIn):
+    if User.objects.filter(username=payload.username).exists():
+        return Status(409, {"detail": "そのユーザー名は使われています"})
+    # create_user: パスワードをハッシュにしてから保存する
+    user = User.objects.create_user(username=payload.username, password=payload.password)
+    Profile.objects.create(user=user)  # 空のプロフィールを一緒に作る
+    return Status(201, user)
+
+
+@router.get("/me", response=ProfileOut, auth=JWTAuth())
+def get_my_profile(request: HttpRequest):
+    # user_id は一意なので、見つかるのは0件か1件
+    return get_object_or_404(Profile, user_id=request.user.id)
+
+
+@router.patch("/me", response=ProfileOut, auth=JWTAuth())
+def update_my_profile(request: HttpRequest, payload: ProfileIn):
+    profile = get_object_or_404(Profile, user_id=request.user.id)
+    profile.bio = payload.bio
+    profile.save()
+    return profile
+```
+
+✅ 検証済み: django-ninja 1.7.1 / django-ninja-jwt 5.4.5（ruff・mypy も通過）
+
+**③ 叩いてみる**
+
+```bash
+# 登録 → 201。もう一度同じ名前で → 409
+curl -s -X POST http://127.0.0.1:8000/api/auth/register -H "Content-Type: application/json" \
+  -d '{"username": "carol", "password": "pass1234"}'
+# carol でログインして、身分証を ACCESS に入れる（2-6 ④と同じ形）
+ACCESS=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "carol", "password": "pass1234"}' \
+  | uv run python -c "import json, sys; print(json.load(sys.stdin)['access'])")
+# 自分のプロフィールを書き換える
+curl -s -X PATCH http://127.0.0.1:8000/api/auth/me -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS" -d '{"bio": "よろしく"}'
+```
+
+```text
+{"id": 3, "username": "carol"}
+{"detail": "そのユーザー名は使われています"}
+{"user_id": 3, "bio": "よろしく"}
+```
+
+✅ 検証済み: 201 / 409 / 200。短いパスワードは 422、身分証なしの `/me` は 401（日本語は `\u…` を直して表示。`id` は環境で変わる）
+
+```bash
+# ②より前からいるユーザーには Profile が無く、/me が 404 になる。作っておく（1人1回。名前は自分のものに）
+uv run python manage.py shell -c "from accounts.models import Profile, User; print(Profile.objects.create(user=User.objects.get(username='alice')))"
+```
+
+✅ 検証済み: `1 のプロフィール` のように表示される。2回目は `IntegrityError (1062, "Duplicate entry ...")`
+
+**④ テスト**（`tests/test_register.py` 新規・全文。`# TODO` の下は先に自分で書く）
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import Profile, User
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.mark.django_db
+def test_register_creates_user_and_profile() -> None:
+    res = client.post("/auth/register", json={"username": "carol", "password": "pass1234"})
+    # TODO: 201 で、応答に password が無く、carol の Profile が1つできていること
+    assert res.status_code == 201
+    assert "password" not in res.json()
+    assert Profile.objects.filter(user_id=res.json()["id"]).count() == 1
+
+
+@pytest.mark.django_db
+def test_registered_user_can_login() -> None:
+    client.post("/auth/register", json={"username": "carol", "password": "pass1234"})
+    res = client.post("/auth/login", json={"username": "carol", "password": "pass1234"})
+    # TODO: 登録したパスワードでログインできること（200）
+    assert res.status_code == 200
+
+
+def test_duplicate_username_is_409(user: User) -> None:
+    res = client.post("/auth/register", json={"username": user.username, "password": "pass1234"})
+    # TODO: 409 で、ユーザーが増えていないこと
+    assert res.status_code == 409
+    assert User.objects.count() == 1
+
+
+def test_update_my_profile(user: User, auth_headers: dict[str, str]) -> None:
+    Profile.objects.create(user=user)
+    res = client.patch("/auth/me", json={"bio": "よろしく"}, headers=auth_headers)
+    # TODO: 200 で、DB の bio が書き換わっていること
+    assert res.status_code == 200
+    assert Profile.objects.get(user=user).bio == "よろしく"
+```
+
+✅ 検証済み: pytest-django 4.14.0（`21 passed`。ruff・mypy も通過）
+
+### 8-2. 🔬 仕組み解剖
+
+| | `create_user()` | `OneToOneField` |
+| --- | --- | --- |
+| 正式名称 | `UserManager.create_user()` | `django.db.models.OneToOneField` |
+| いつ・誰が | 呼んだとき。Django がパスワードを**ハッシュ**にしてから保存する | マイグレーション時に `UNIQUE` 付きの列になる。`user.profile` で逆向きにも引ける |
+| 発行される SQL | `INSERT INTO accounts_user (password, ...) VALUES ('pbkdf2_sha256$1000000$...', ...)` | `user.profile` を読むと `SELECT ... FROM accounts_profile WHERE user_id = 1 LIMIT 21` |
+| TS での対応物 | 対応物なし。Node では bcrypt でハッシュを自分で作る | 対応物なし（ORM の機能） |
+| なぜこの設計 | 平文で保存する事故を防ぐ | 「1人に1つ」を DB が守る |
+| 失敗すると | 同じ名前は `IntegrityError` で 500。だから②は先に `exists()` で 409 を返す | 2つ目は `IntegrityError (1062)`。無いものを `user.profile` で読むと `RelatedObjectDoesNotExist` |
+
+✅ 検証済み: Django 5.2.17（SQL は `CaptureQueriesContext` で確認。登録1回で SELECT 1本 + INSERT 2本）
+
+> 🧒 **かみくだくと**: **ハッシュ**は、パスワードを決まった手順で崩した文字列。元には戻せない。
+> ログインでは、入力を同じ手順で崩して比べる。
+
+```text
+accounts_user                accounts_profile
++----+----------+            +----+-------------+------------------+
+| id | username |            | id | bio         | user_id (UNIQUE) |
++----+----------+            +----+-------------+------------------+
+|  1 | alice    | <--------- |  1 | ""          |                1 |
+|  3 | carol    | <--------- |  2 | "yoroshiku" |                3 |
++----+----------+            +----+-------------+------------------+
+```
+
+✅ 検証済み: 上の SQL どおりの形（`user_id` に同じ値は2回入らない）
+
+見てほしいのは、矢印の根元の **`UNIQUE`** です。外せば 2-2 と同じ多対一になります。
+
+### 8-3. 🐍 Python注
+
+このステップに新しい Python の文法はありません。
+
+### 8-4. 解説 — なぜこう設計するか
+
+自己紹介はログインに使いません。だから User に足さず、別の台帳に分けます。
+
+🧠 Django の考え方: 認証に使う情報は User に、それ以外は一対一の別モデルに。
+
+> ⏭️ **後で回収**: ②は User と Profile を別々に INSERT する。2本目が失敗すると、Profile の無い User が残る。
+> 「全部か、何もしないか」にする方法（トランザクション）は第3部-3で扱う。
+
+### 8-5. 🏢 実務メモ ／ 🔓 教材用の簡略化
+
+> 🏢 **実務メモ**: 認証に関係ない情報は、一対一の別モデルに置く。公式ドキュメントもこの形を案内している。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/#extending-the-existing-user-model
+
+> 🔓 **教材用の簡略化**: パスワードの条件は「8文字以上」だけ。
+> **本番では**: `validate_password()` で、よくあるパスワードも弾く。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/auth/passwords/#module-django.contrib.auth.password_validation
+
+### 8-6. 🔮 予測 → 動作確認
+
+1. ②の `create_user` を `User.objects.create` に変えて登録すると、ログインできる？
+2. 登録 API を1回呼ぶと、SQL は何本？
+3. 同じユーザーに Profile を2つ作ろうとすると？
+
+<details><summary>答え</summary>
+
+1. できない（401）。`pass1234` が平文のまま入り、照合が合わない（検証済み）
+2. 3本。名前の確認（`SELECT 1 ... LIMIT 1`）、User の INSERT、Profile の INSERT
+3. `IntegrityError (1062, "Duplicate entry '1' for key 'accounts_profile.user_id'")`。DB の `UNIQUE` が止める
+
+</details>
+
+### 8-7. ✅ 想起チェック
+
+1. `OneToOneField` と `ForeignKey` は、テーブルの上で何が違う？
+2. `create_user()` が `objects.create()` と違うところは？
+
+<details><summary>答え</summary>
+
+1. つなぐ列に `UNIQUE` が付くかどうか
+2. パスワードをハッシュにしてから保存する
+
+</details>
+
+### 8-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **ユーザーは `create_user()` で作り、User に足したい情報は `OneToOneField` の別モデルに置く。**
+
+📒 用語集に追記: 一対一 / ハッシュ / `create_user()`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ9` — コメントと返信（自己参照）
