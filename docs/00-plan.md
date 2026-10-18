@@ -160,6 +160,7 @@ uv run mypy .               # 型チェック
 services:
   db:
     image: mysql:8.4
+    restart: unless-stopped   # Docker Desktop が再起動したら自動で起動する（自分で stop したときは除く）
     environment:
       MYSQL_ROOT_PASSWORD: rootpass
       MYSQL_DATABASE: blog
