@@ -2608,3 +2608,215 @@ browser: GET /media/posts/red.png --> static() reads the file on disk
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ11` — 検索と絞り込み
+
+---
+
+## 第2部-11: 検索と絞り込み
+
+**❓ この回の問い**: 2-10 までで、記事にカテゴリ・タグ・コメント・画像が付いた。記事が増えたら、欲しい記事だけをどう取り出す？
+
+**作るもの**: `GET /api/posts?q=ninja&category_id=2` で、検索とカテゴリの絞り込みができる一覧
+**重要度**: 🔴 毎日使う — 一覧 API には、ほぼ必ず検索や絞り込みが付く
+**前ステップとの接続**: 2-4 の `list_posts` に、`filter()` を重ねる
+
+### 11-0. このステップの初出
+
+**Django / Ninja**: フィールドルックアップ（`__icontains`）, `Q` / **Python**: `if q:`（空の文字列は偽）
+
+> 🧒 **かみくだくと**: **フィールドルックアップ**は、`項目名__比べ方` の形で「どう比べるか」を書く方法。
+> `title__icontains="ninja"` は「title に ninja を含む（大文字・小文字は区別しない）」。
+
+> 🧒 **かみくだくと**: **クエリパラメータ**は、URL の `?` の後ろ（`?q=ninja&category_id=2`）の部分。
+> Ninja では、関数の引数のうち、パス（`{post_id}`）に無いものがクエリパラメータになる。
+
+### 11-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 一覧に検索を足す**（`blog/api.py`。import を1行足し、`list_posts` を丸ごと置き換える）
+
+import の1行（`from django.http import HttpRequest` の上に足す）
+
+```python
+from django.db.models import Q
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+`list_posts`（デコレータの行から `return` までを、この形に置き換える）
+
+```python
+@router.get("", response=list[PostOut])
+def list_posts(request: HttpRequest, q: str | None = None, category_id: int | None = None):
+    posts = (
+        Post.objects.select_related("category")  # カテゴリは JOIN で同じ SQL に入れる
+        .prefetch_related("tags")  # タグは別の SQL 1本でまとめて取る
+        .all()
+    )
+    if q:
+        # タイトルか本文のどちらかに q を含む記事（大文字・小文字は区別しない）
+        posts = posts.filter(Q(title__icontains=q) | Q(body__icontains=q))
+    if category_id is not None:
+        posts = posts.filter(category_id=category_id)
+    return posts
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+**② 叩いてみる**（`q` は、自分の記事のタイトルや本文にある言葉に変える）
+
+```bash
+curl -s "http://127.0.0.1:8000/api/posts?q=ninja"
+curl -s "http://127.0.0.1:8000/api/posts?q=ninja&category_id=1"
+# 日本語は --data-urlencode で送る（-G は「GET の ? の後ろに付ける」）
+curl -s -G http://127.0.0.1:8000/api/posts --data-urlencode "q=日記"
+```
+
+✅ 検証済み: 記事「Ninja で作った」「今日の日記」「三つ目の投稿（本文に ninja）」で、1本目は1件目と3件目、3本目は「今日の日記」だけが返る。`?category_id=abc` は 422
+
+URL は必ず `"` で囲みます。囲まないと、zsh が `?` をファイル名の記号と読んで `no matches found` になります。`&` も、囲まないと「後ろで実行」の記号になります。
+
+1本目で実際に出る SQL（`WHERE` の部分）です。
+
+```sql
+WHERE (`blog_post`.`title` LIKE '%ninja%' OR `blog_post`.`body` LIKE '%ninja%')
+```
+
+✅ 検証済み: MySQL 8.4.11（`CaptureQueriesContext` で確認。SQL は 2-4 と同じ2本のまま）
+
+**③ テスト**（`tests/test_search.py` 新規）
+
+要件だけ書きます。記事を3件作るフィクスチャ（`posts`）を自分で作ってから、テストを書いてください。並び順はまだ決めていない（2-12 で扱う）ので、タイトルは集合（`{...}`）にして比べます。
+
+1. `?q=NINJA` で、タイトルに Ninja を含む記事と、本文に ninja を含む記事の2件が当たる
+2. `?q=`（空）だと、全部返る
+3. `q` と `category_id` を両方付けると、両方に合う記事だけ
+
+<details><summary>解答例</summary>
+
+```python
+import pytest
+from ninja.testing import TestClient
+
+from blog.models import Category, Post
+from config.api import api
+
+client = TestClient(api)
+
+
+@pytest.fixture
+def posts(db) -> None:
+    # 検索の材料: 記事3件。カテゴリは「技術」1件と「日記」2件
+    tech = Category.objects.create(name="技術")
+    diary = Category.objects.create(name="日記")
+    Post.objects.create(title="Ninja で作った", body="API を書いた", category=tech)
+    Post.objects.create(title="今日の日記", body="django を少し触った", category=diary)
+    Post.objects.create(title="三つ目の投稿", body="ninja の話はしない", category=diary)
+
+
+def titles(url: str) -> set[str]:
+    # 並び順はまだ決めていない（2-12 で扱う）ので、集合にして比べる
+    return {p["title"] for p in client.get(url).json()}
+
+
+def test_q_searches_title_and_body(posts: None) -> None:
+    # 大文字・小文字は区別しない。タイトルと本文のどちらに含まれていても当たる
+    assert titles("/posts?q=NINJA") == {"Ninja で作った", "三つ目の投稿"}
+
+
+def test_empty_q_returns_all(posts: None) -> None:
+    assert len(titles("/posts?q=")) == 3
+
+
+def test_q_and_category_are_and(posts: None) -> None:
+    diary = Category.objects.get(name="日記")
+    assert titles(f"/posts?q=ninja&category_id={diary.id}") == {"三つ目の投稿"}
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`31 passed`。2-4 の SQL 本数のテストもそのまま通る。ruff・mypy も通過）
+
+### 11-2. 🔬 仕組み解剖
+
+| | フィールドルックアップ | `Q` |
+| --- | --- | --- |
+| 正式名称 | field lookups（`exact`・`icontains`・`gt` など） | `django.db.models.Q`（Q オブジェクト） |
+| いつ・誰が | `filter()` のときに ORM が `WHERE` の部品にする。SQL が飛ぶのは、Ninja がレスポンスを作るとき（遅延評価） | `Q(...) \| Q(...)` で OR の部品を組み立てる。`filter()` を重ねた分は AND になる |
+| 発行される SQL | MySQL では `icontains` も `LIKE '%ninja%'`。大文字・小文字を無視するのは MySQL の照合順序（下の 💡） | `(title LIKE ... OR body LIKE ...) AND category_id = 1` |
+| TS での対応物 | 対応物なし（ORM の機能） | 対応物なし（ORM の機能） |
+| なぜこの設計 | `__` で区切ると、比べ方もリレーション先（`category__name`）も同じ書き方で表せる | キーワード引数（`filter(a=1, b=2)`）は AND しか表せない。OR を表す部品が別に要る |
+| 失敗すると | 綴りを間違えると `FieldError`（500）。`perhaps you meant icontains?` と候補が出る | `\|` を Python の `or` と書くと、エラーにならずに左の `Q` だけが効く（下の 🔮） |
+
+✅ 検証済み: Django 5.2.17（FieldError と `or` の挙動はシェルで確認）
+
+```text
+posts = Post.objects.select_related(...)     SELECT ... FROM blog_post
+  .filter(Q(title__icontains=q)              WHERE (title LIKE '%ninja%'
+          | Q(body__icontains=q))                   OR body LIKE '%ninja%')
+  .filter(category_id=category_id)             AND category_id = 1
+```
+
+✅ 検証済み: `?q=ninja&category_id=1` で出た SQL を短くしたもの
+
+見てほしいのは、`filter()` を重ねるたびに `WHERE` に AND で足されていく点です。SQL はまだ飛んでいません。最後に1本になって飛びます。
+
+> 💡補足: このリポジトリの MySQL の照合順序（文字の比べ方の決まり）は `utf8mb4_0900_ai_ci`。`ci` は大文字・小文字、`ai` はアクセントを区別しない。日本語では濁点も区別せず、`はは` と `パパ` が等しくなる（検証済み）。これは Django ではなく DB の設定（根拠: https://docs.djangoproject.com/en/5.2/ref/databases/#mysql-collation）。
+
+### 11-3. 🐍 Python注
+
+> 🐍 **Python注**: `if q:` は、`q` が `None` でも空の文字列 `""` でも偽になる（TS と同じ）。
+> `{p["title"] for p in ...}` は集合を作る書き方。重複が消え、順番を持たない。
+
+### 11-4. 解説 — なぜこう設計するか
+
+`q` は `if q:`、`category_id` は `is not None` で分けています。`?q=` のような空の検索は「条件なし」として全部返すためです。一方、数値を `if category_id:` で見ると、`0` も偽になり「条件なし」と同じ扱いになります。数値は `None` かどうかだけを見ます。
+
+🧠 Django の考え方: QuerySet は条件を積み重ねる設計図。条件を足しても、SQL は最後に1本だけ。
+
+### 11-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: `LIKE '%ninja%'` は、前が `%` なので索引（目次）が使えず、全部の行を読む。記事が大量になったら全文検索や専用の検索エンジンに切り替える（拡張モジュール `search`）。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/search/#standard-textual-queries
+
+> ⚠️ **アンチパターン**: f 文字列で SQL を組み立てる（`f"... LIKE '%{q}%'"`）。`q` に `'` を混ぜられると、SQL を書き換えられる（SQL インジェクション）。ORM は値を SQL と別に渡すので安全。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/security/#sql-injection-protection
+
+### 11-6. 🔮 予測 → 動作確認
+
+1. ①の `|` を `or` に変えて `?q=ninja` を叩くと、何件返る？（本文だけに ninja がある記事に注目）
+2. `?q=日記` で、カテゴリ「日記」の記事は全部当たる？
+3. `?category_id=abc` は、何番のステータスで返る？
+
+<details><summary>答え</summary>
+
+1. 本文だけに ninja がある記事が消える。`Q(...) or Q(...)` は、左の `Q` をそのまま返すだけだから。エラーにならないので気づきにくい（検証済み）
+2. 当たらない。探しているのはタイトルと本文だけ。カテゴリ名でも探すなら `Q(category__name__icontains=q)` を足す
+3. 422。Ninja が `int` に変換できず、`"loc": ["query", "category_id"]` を返す（検証済み）
+
+</details>
+
+### 11-7. ✅ 想起チェック
+
+1. `title__icontains` の `__` の左と右は、それぞれ何？
+2. `filter()` を2回重ねると、条件は AND と OR のどちらでつながる？
+
+<details><summary>答え</summary>
+
+1. 左が項目名（`title`）、右が比べ方（`icontains`）
+2. AND。OR にしたいときは `Q(...) | Q(...)`
+
+</details>
+
+### 11-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`filter(項目名__比べ方=値)` で条件を書き、OR が要るときだけ `Q` を `|` でつなぐ。**
+
+📒 用語集に追記: フィールドルックアップ / `Q` / クエリパラメータ / 照合順序
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ12` — ページング

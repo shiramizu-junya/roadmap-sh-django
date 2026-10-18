@@ -75,3 +75,7 @@
 | `ImageField` | models.ImageField | 画像の置き場所を覚える列。DB では `varchar(100)` の文字列。Pillow が要る。モデルで保存するときは中身を確かめない | 第2部-10 |
 | `UploadedFile` | UploadedFile | 送られてきたファイル。`name`・`size`・`read()` などを持つ。Ninja では引数の型に書くと受け取れる | 第2部-10 |
 | multipart/form-data | multipart/form-data | 文字とファイルを区切り線で仕切って、1回で送る形式。`curl -F` やブラウザの `FormData` が使う | 第2部-10 |
+| フィールドルックアップ | field lookups | `項目名__比べ方` の形で、どう比べるかを書く方法。`title__icontains="x"` は「title に x を含む（大文字・小文字は区別しない）」 | 第2部-11 |
+| `Q` | Q オブジェクト（`django.db.models.Q`） | 条件を1つの部品にしたもの。`Q(a) \| Q(b)` で OR を表す。`filter()` を重ねた分は AND | 第2部-11 |
+| クエリパラメータ | query parameters | URL の `?` の後ろ（`?q=x&category_id=2`）。Ninja では、パスに無い関数の引数がクエリパラメータになる | 第2部-11 |
+| 照合順序 | collation | DB が文字を比べるときの決まり。`utf8mb4_0900_ai_ci` は大文字・小文字もアクセント（日本語の濁点も）も区別しない | 第2部-11 |
