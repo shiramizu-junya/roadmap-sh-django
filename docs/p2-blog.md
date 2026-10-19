@@ -2846,3 +2846,246 @@ posts = Post.objects.select_related(...)     SELECT ... FROM blog_post
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ12` — ページング
+
+---
+
+## 第2部-12: ページング
+
+**❓ この回の問い**: 2-11 で、欲しい記事だけを取り出せるようになった。では、当たった記事が1万件あったら、全部を1回で返してよい？
+
+**作るもの**: `GET /api/posts?limit=5&offset=5` で、記事一覧が5件ずつに分かれて返る
+**重要度**: 🔴 毎日使う — 一覧 API には、ほぼ必ずページングが付く
+**前ステップとの接続**: 2-11 の `list_posts` に、並び順と `@paginate` を足す
+
+### 12-0. このステップの初出
+
+**Django / Ninja**: `@paginate`, `order_by()` / **Python**: デコレータの2段重ね
+
+> 🧒 **かみくだくと**: **ページング**（pagination）は、長い一覧を「何件目から何件」と区切って返すこと。
+> `limit` は「何件返すか」、`offset` は「先頭から何件飛ばすか」。`?limit=5&offset=5` は6件目から5件。
+
+### 12-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 一覧を区切って返す**（`blog/api.py`。import を1行足し、`list_posts` の上半分を置き換える）
+
+import の1行（`from ninja.errors import HttpError` の下に足す）
+
+```python
+from ninja.pagination import paginate
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+`list_posts` のデコレータから `posts = (...)` の閉じかっこまでを、この形に置き換える（`if q:` から下はそのまま残す）
+
+```python
+@router.get("", response=list[PostOut])
+@paginate  # ?limit= と ?offset= を受け取り、{"items": [...], "count": 全件数} の形で返す
+def list_posts(request: HttpRequest, q: str | None = None, category_id: int | None = None):
+    posts = (
+        Post.objects.select_related("category")  # カテゴリは JOIN で同じ SQL に入れる
+        .prefetch_related("tags")  # タグは別の SQL 1本でまとめて取る
+        .order_by("-created_at", "-id")  # 新しい順。作成時刻が同じなら id の大きい順
+    )
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+変わったのは3か所です。`@paginate` の1行を足し、`.all()` を `.order_by(...)` に変えました。`response=list[PostOut]` は**そのまま**です。`@paginate` が、外側を `{"items": ..., "count": ...}` に包んでくれます。
+
+**② 叩いてみる**（2-11 ⓪のデータが入っている前提）
+
+```bash
+curl -s "http://127.0.0.1:8000/api/posts?limit=5"
+curl -s "http://127.0.0.1:8000/api/posts?limit=5&offset=5"
+curl -s "http://127.0.0.1:8000/api/posts?q=django&limit=2&offset=2"
+```
+
+```text
+{"items": [{"id": ..., "title": "旅の持ち物リスト", ...}, ... 5件], "count": 19}
+{"items": [{"id": ..., "title": "パパ と散歩", ...}, ... 5件], "count": 19}
+{"items": [... 2件], "count": 6}
+```
+
+✅ 検証済み: 1ページ目は「旅の持ち物リスト」から新しい順に5件。`count` はどのページでも全件数。`?limit=0` と `?offset=-1` は 422（日本語は `\u…` を直して表示）
+
+1ページ目の SQL です。
+
+```sql
+SELECT COUNT(*) AS `__count` FROM `blog_post`;
+SELECT ... FROM `blog_post` LEFT OUTER JOIN `blog_category` ON (...)
+  ORDER BY `blog_post`.`created_at` DESC, `blog_post`.`id` DESC LIMIT 5;
+SELECT ... FROM `blog_tag` INNER JOIN `blog_post_tags` ON (...) WHERE `blog_post_tags`.`post_id` IN (...);
+```
+
+✅ 検証済み: MySQL 8.4.11（`CaptureQueriesContext` で確認。`offset` があると `LIMIT 5 OFFSET 5`）
+
+**③ 既存のテストを直す**
+
+①のあと、一覧の形が「リスト」から「`items` と `count` の入れ物」に変わるので、2つのテストが落ちます。
+
+`tests/test_query_count.py`（2か所を置き換える）
+
+```diff
+-    # この中で出た SQL がちょうど2本でなければ失敗する
+-    with django_assert_num_queries(2):
++    # この中で出た SQL がちょうど3本でなければ失敗する（件数を数える1本が増えた）
++    with django_assert_num_queries(3):
+         res = client.get("/posts")
+
+     assert res.status_code == 200
+-    assert len(res.json()) == n_posts
++    assert len(res.json()["items"]) == n_posts
+```
+
+`tests/test_search.py`（`titles` と、2つの `assert` を置き換える）
+
+```diff
+-def titles(url: str) -> set[str]:
+-    # 並び順はまだ決めていない（2-12 で扱う）ので、集合にして比べる
+-    return {p["title"] for p in client.get(url).json()}
++def titles(url: str) -> list[str]:
++    # 2-12 で並び順（新しい順）を決めたので、リストのまま順番も比べる
++    return [p["title"] for p in client.get(url).json()["items"]]
+```
+
+```diff
+-    assert titles("/posts?q=NINJA") == {"Ninja で作った", "三つ目の投稿"}
++    assert titles("/posts?q=NINJA") == ["三つ目の投稿", "Ninja で作った"]
+```
+
+```diff
+-    assert titles(f"/posts?q=ninja&category_id={diary.id}") == {"三つ目の投稿"}
++    assert titles(f"/posts?q=ninja&category_id={diary.id}") == ["三つ目の投稿"]
+```
+
+✅ 検証済み: 2-11 で「並び順は 2-12 で扱う」とした集合の比べ方を、ここで順番つきに戻した
+
+**④ テスト**（`tests/test_pagination.py` 新規）
+
+要件だけ書きます。
+
+1. 記事を5件作り、`?limit=2` で、新しい順に2件。`count` は 5
+2. `?limit=2&offset=2` で、その続きの2件
+3. `?limit=0` は 422
+
+<details><summary>解答例</summary>
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Post
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_limit_and_offset(user: User) -> None:
+    for i in range(5):
+        Post.objects.create(title=f"記事{i}", body="b", author=user)  # 記事0 が一番古い
+
+    first = client.get("/posts?limit=2").json()
+    assert first["count"] == 5  # count はページではなく、全部の件数
+    assert [p["title"] for p in first["items"]] == ["記事4", "記事3"]  # 新しい順
+
+    second = client.get("/posts?limit=2&offset=2").json()
+    assert [p["title"] for p in second["items"]] == ["記事2", "記事1"]  # 続きから
+
+
+def test_limit_zero_is_422(user: User) -> None:
+    assert client.get("/posts?limit=0").status_code == 422
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`33 passed`。ruff・mypy も通過）
+
+### 12-2. 🔬 仕組み解剖
+
+| | `@paginate` | `order_by()` |
+| --- | --- | --- |
+| 正式名称 | `ninja.pagination.paginate`（既定は `LimitOffsetPagination`） | `QuerySet.order_by()` |
+| いつ・誰が | 起動時に Ninja が、関数の引数に `limit` と `offset` を足す。リクエストごとに、関数が返した QuerySet を `[offset:offset + limit]` で切り、件数も数える | QuerySet に「並べ方」を書き足すだけ。SQL が飛ぶのは評価のとき |
+| 発行される SQL | `COUNT(*)` が1本増える。QuerySet を切ると `LIMIT 5 OFFSET 5` になる | `ORDER BY created_at DESC, id DESC`。`-` を付けると逆順（DESC） |
+| TS での対応物 | 対応物なし（API 層の機能） | 対応物なし（ORM の機能） |
+| なぜこの設計 | 関数は「全部の QuerySet」を返すだけでよい。区切る仕事を関数の外に出すので、どの一覧にも同じ形で付けられる | 並べ方を決めないと、DB はどの順で返してもよい。ページの境目で、重なりや抜けが起きる |
+| 失敗すると | `limit` が 0 以下、`offset` が負だと 422 | 無い項目名を書くと `FieldError`（500） |
+
+✅ 検証済み: Django 5.2.17 / django-ninja 1.7.1（引数が足されるのは Swagger UI でも見える）
+
+```text
+Post.objects....order_by("-created_at", "-id")    <- list_posts returns this
+        |
+        |  @paginate cuts it
+        v
+  [offset : offset + limit]  --> SELECT ... ORDER BY ... LIMIT 5 OFFSET 5
+  .count()                   --> SELECT COUNT(*) ...
+        |
+        v
+  {"items": [...5 posts...], "count": 19}
+```
+
+✅ 検証済み: ②の1本目と2本目
+
+見てほしいのは、`list_posts` は全部を返しているつもりでも、SQL は5件分しか取っていない点です。QuerySet は切ってもまだ SQL を出さず、`LIMIT` 付きの設計図になるだけです。SQL は、Ninja がレスポンスを作るときに飛びます（1-5 の遅延評価）。
+
+### 12-3. 🐍 Python注
+
+> 🐍 **Python注**: デコレータを2段重ねると、**関数に近い下から**順にかかる。`@paginate` で包んだものを、`@router.get` が受付に登録する。
+> `queryset[5:10]` はスライス（TS の `slice(5, 10)`）。QuerySet では `LIMIT 5 OFFSET 5` の SQL になる。
+
+### 12-4. 解説 — なぜこう設計するか
+
+`order_by` に `-id` を足したのは、`created_at` が同じ記事が2件あると、並びが決まらないからです。並びが決まらないと、1ページ目と2ページ目で同じ記事が出たり、どこにも出なかったりします。`id` は重ならないので、最後に置けば必ず順番が1つに決まります。
+
+🧠 Django の考え方: 関数は QuerySet を返すだけ。切り方は外から足す。
+
+### 12-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: `limit` には、既定では上限が無い。`?limit=1000000` で全件を読ませることもできる。`@paginate(LimitOffsetPagination, max_limit=100)` のように上限を付ける。
+> 根拠: https://django-ninja.dev/guide/pagination/
+
+> ⚠️ **アンチパターン**: 重なりうる項目（`created_at` だけ）で並べて `LIMIT` を付ける。同じ値の行は、DB が好きな順で返してよいことになっている。最後に `id` のような重ならない項目を足す。
+> 根拠: https://dev.mysql.com/doc/refman/8.4/en/limit-optimization.html
+
+### 12-6. 🔮 予測 → 動作確認
+
+1. ①のあと、一覧を1回呼ぶと SQL は何本？（2-4 では2本だった）
+2. `@router.get` と `@paginate` の上下を入れ替えると、どうなる？
+3. 記事が19件のとき、`?offset=100` は何が返る？
+
+<details><summary>答え</summary>
+
+1. 3本。件数を数える `COUNT(*)` が増える。2-4 の `test_query_count` が落ちるのはこのため（③）
+2. エラーにならずに、`limit` が効かないただのリストが返る。`@router.get` が、`@paginate` に包まれる前の関数を登録してしまうから（検証済み）
+3. 200 で `{"items": [], "count": 19}`。ページが無くても 404 にはならない（検証済み）
+
+</details>
+
+### 12-7. ✅ 想起チェック
+
+1. `?limit=10&offset=20` は、何件目から何件目？
+2. ページングするとき、`order_by()` が要るのはなぜ？
+
+<details><summary>答え</summary>
+
+1. 21件目から30件目
+2. 並び順を決めないと、DB はどの順で返してもよいので、ページの境目で記事が重なったり抜けたりするから
+
+</details>
+
+### 12-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **一覧は `order_by()` で順番を1つに決めてから、`@paginate` で区切る。**
+
+📒 用語集に追記: ページング / `@paginate` / `order_by()`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ13` — メール送信

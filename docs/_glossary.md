@@ -79,3 +79,6 @@
 | `Q` | Q オブジェクト（`django.db.models.Q`） | 条件を1つの部品にしたもの。`Q(a) \| Q(b)` で OR を表す。`filter()` を重ねた分は AND | 第2部-11 |
 | クエリパラメータ | query parameters | URL の `?` の後ろ（`?q=x&category_id=2`）。Ninja では、パスに無い関数の引数がクエリパラメータになる | 第2部-11 |
 | 照合順序 | collation | DB が文字を比べるときの決まり。`utf8mb4_0900_ai_ci` は大文字・小文字もアクセント（日本語の濁点も）も区別しない | 第2部-11 |
+| ページング | pagination | 長い一覧を区切って返すこと。`limit` は何件返すか、`offset` は先頭から何件飛ばすか | 第2部-12 |
+| `@paginate` | ninja.pagination.paginate | 一覧の関数に付けるデコレータ。`?limit=`・`?offset=` を受け取り、`{"items": [...], "count": 全件数}` で返す。`@router.get` の下に置く | 第2部-12 |
+| `order_by()` | QuerySet.order_by() | 並び順を決める。`-` を付けると逆順（新しい順など）。最後に `id` を足すと順番が1つに決まる | 第2部-12 |
