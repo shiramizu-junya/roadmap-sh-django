@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from django.core.files.images import get_image_dimensions
+from django.db.models import Q
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status, UploadedFile
@@ -47,12 +48,18 @@ class PostOut(Schema):
 
 
 @router.get("", response=list[PostOut])
-def list_posts(request: HttpRequest):
-    return (
+def list_posts(request: HttpRequest, q: str | None = None, category_id: int | None = None):
+    posts = (
         Post.objects.select_related("category")  # カテゴリは JOIN で同じ SQL に入れる
         .prefetch_related("tags")  # タグは別の SQL 1本でまとめて取る
         .all()
     )
+    if q:
+        # タイトルか本文のどちらかに q を含む記事（大文字・小文字は区別しない）
+        posts = posts.filter(Q(title__icontains=q) | Q(body__icontains=q))
+    if category_id is not None:
+        posts = posts.filter(category_id=category_id)
+    return posts
 
 
 @router.post("", response={201: PostOut}, auth=JWTAuth())  # 身分証が無ければ 401
