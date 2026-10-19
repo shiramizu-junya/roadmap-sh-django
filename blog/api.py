@@ -6,6 +6,7 @@ from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status, UploadedFile
 from ninja.errors import HttpError
+from ninja.pagination import paginate
 from ninja_jwt.authentication import JWTAuth
 
 from .models import Category, Comment, Post, PostImage, Tag
@@ -48,11 +49,12 @@ class PostOut(Schema):
 
 
 @router.get("", response=list[PostOut])
+@paginate  # ?limit= と ?offset= を受け取り、{"items": [...], "count": 全件数} の形で返す
 def list_posts(request: HttpRequest, q: str | None = None, category_id: int | None = None):
     posts = (
         Post.objects.select_related("category")  # カテゴリは JOIN で同じ SQL に入れる
         .prefetch_related("tags")  # タグは別の SQL 1本でまとめて取る
-        .all()
+        .order_by("-created_at", "-id")  # 新しい順。作成時刻が同じなら id の大きい順
     )
     if q:
         # タイトルか本文のどちらかに q を含む記事（大文字・小文字は区別しない）

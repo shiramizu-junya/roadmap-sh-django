@@ -16,9 +16,9 @@ def test_list_posts_query_count_does_not_grow(n_posts: int, django_assert_num_qu
         post = Post.objects.create(title=f"記事{i}", body="b", category=category)
         post.tags.set(tags)
 
-    # この中で出た SQL がちょうど2本でなければ失敗する
-    with django_assert_num_queries(2):
+    # この中で出た SQL がちょうど3本でなければ失敗する（件数を数える1本が増えた）
+    with django_assert_num_queries(3):
         res = client.get("/posts")
 
     assert res.status_code == 200
-    assert len(res.json()) == n_posts
+    assert len(res.json()["items"]) == n_posts

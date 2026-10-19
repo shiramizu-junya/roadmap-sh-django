@@ -17,14 +17,14 @@ def posts(db) -> None:
     Post.objects.create(title="三つ目の投稿", body="ninja の話はしない", category=diary)
 
 
-def titles(url: str) -> set[str]:
-    # 並び順はまだ決めていない（2-12 で扱う）ので、集合にして比べる
-    return {p["title"] for p in client.get(url).json()}
+def titles(url: str) -> list[str]:
+    # 2-12 で並び順（新しい順）を決めたので、リストのまま順番も比べる
+    return [p["title"] for p in client.get(url).json()["items"]]
 
 
 def test_q_searches_title_and_body(posts: None) -> None:
     # 大文字・小文字は区別しない。タイトルと本文のどちらに含まれていても当たる
-    assert titles("/posts?q=NINJA") == {"Ninja で作った", "三つ目の投稿"}
+    assert titles("/posts?q=NINJA") == ["三つ目の投稿", "Ninja で作った"]
 
 
 def test_empty_q_returns_all(posts: None) -> None:
@@ -33,4 +33,4 @@ def test_empty_q_returns_all(posts: None) -> None:
 
 def test_q_and_category_are_and(posts: None) -> None:
     diary = Category.objects.get(name="日記")
-    assert titles(f"/posts?q=ninja&category_id={diary.id}") == {"三つ目の投稿"}
+    assert titles(f"/posts?q=ninja&category_id={diary.id}") == ["三つ目の投稿"]
