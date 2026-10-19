@@ -105,7 +105,7 @@ def delete_post(request: HttpRequest, post_id: int):
     post = get_object_or_404(Post, id=post_id)
     if post.author_id != request.user.id:
         raise HttpError(403, "自分の記事しか削除できません")
-    post.delete()
+    post.soft_delete()  # 行は残して、消した印だけ付ける
     return Status(204, None)
 
 
