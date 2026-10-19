@@ -82,3 +82,7 @@
 | ページング | pagination | 長い一覧を区切って返すこと。`limit` は何件返すか、`offset` は先頭から何件飛ばすか | 第2部-12 |
 | `@paginate` | ninja.pagination.paginate | 一覧の関数に付けるデコレータ。`?limit=`・`?offset=` を受け取り、`{"items": [...], "count": 全件数}` で返す。`@router.get` の下に置く | 第2部-12 |
 | `order_by()` | QuerySet.order_by() | 並び順を決める。`-` を付けると逆順（新しい順など）。最後に `id` を足すと順番が1つに決まる | 第2部-12 |
+| メールバックエンド | email backend（`EMAIL_BACKEND`） | メールをどこへ届けるかを決める差し替え部品。開発は console（画面）、テストは locmem（メモリ）、本番は smtp | 第2部-13 |
+| `send_mail()` | django.core.mail.send_mail | 件名・本文・差出人・宛先を渡してメールを送る。届け方は `EMAIL_BACKEND` に任せる | 第2部-13 |
+| SMTP | Simple Mail Transfer Protocol | メールをサーバからサーバへ送る決まり。Django の既定のバックエンドは `localhost:25` の SMTP サーバに渡す | 第2部-13 |
+| ヘッダインジェクション | header injection | 件名などに改行を混ぜて、メールの見出しを勝手に書き足す攻撃。Django は改行を見つけると `BadHeaderError` で止める | 第2部-13 |

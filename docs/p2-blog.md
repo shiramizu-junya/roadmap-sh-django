@@ -3089,3 +3089,237 @@ Post.objects....order_by("-created_at", "-id")    <- list_posts returns this
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ13` — メール送信
+
+---
+
+## 第2部-13: メール送信
+
+**❓ この回の問い**: 2-9 でコメントを付けられるようにした。でも記事を書いた人は、コメントが付いたことにどう気づく？
+
+**作るもの**: コメントが付いたら、記事を書いた人にメールで知らせる（本物は送らず、`runserver` の画面に出す）
+**重要度**: 🟡 読めればよい — 書くのは1回だが、登録確認・パスワード再設定などで必ず出会う
+**前ステップとの接続**: 2-9 の `create_comment` の最後に、メールを1通足す
+
+### 13-0. このステップの初出
+
+**Django / Ninja**: `send_mail()`, `EMAIL_BACKEND` / **Python**: `and` の途中で止まる性質
+
+> 🧒 **かみくだくと**: **メールバックエンド**（`EMAIL_BACKEND`）は、メールを「どこへ届けるか」を決める差し替え部品。
+> 本番は SMTP（メールを送る仕組み）のサーバへ渡す。開発中は、画面（コンソール）に出すだけにできる。
+
+### 13-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① メールの届け先を、画面にする**（`config/settings.py` のファイルの最後に追加）
+
+```python
+# メールは送らずに、runserver の画面（コンソール）に出す
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+```
+
+✅ 検証済み: Django 5.2.17
+
+**② コメントが付いたら知らせる**（`blog/api.py`。import を1行足し、`create_comment` の最後に追加）
+
+import の1行（`from django.core.files.images import get_image_dimensions` の下に足す）
+
+```python
+from django.core.mail import send_mail
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+`create_comment` の `comment = Comment.objects.create(...)` と `return Status(201, comment)` の**間**に追加
+
+```python
+    # 記事を書いた人に知らせる（自分の記事へのコメントと、メールアドレスが無い人は除く）
+    author = post.author
+    if author is not None and author.email and author.id != request.user.id:
+        send_mail(
+            subject=f"「{post.title}」にコメントが付きました",
+            message=comment.body,
+            from_email=None,  # None なら DEFAULT_FROM_EMAIL（既定は webmaster@localhost）
+            recipient_list=[author.email],
+        )
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+**③ 試す**（carol の記事に、自分（`ACCESS` の持ち主）がコメントする）
+
+carol にメールアドレスを入れ、carol の記事の id を調べます。
+
+```bash
+SQL_LOG=0 uv run python manage.py shell -c "from accounts.models import User; from blog.models import Post; User.objects.filter(username='carol').update(email='carol@example.com'); print(Post.objects.get(title='北海道でキャンプ').id)"
+```
+
+✅ 検証済み: 出てきた数字が記事の id（2-11 ⓪のデータが前提）
+
+```bash
+# 21 は、上で出てきた id に変える
+curl -s -X POST http://127.0.0.1:8000/api/posts/21/comments -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS" -d '{"body": "素敵な旅ですね"}'
+```
+
+`runserver` を動かしている画面に、こう出ます。
+
+```text
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Subject:
+ =?utf-8?b?44CM5YyX5rW36YGT44Gn44Kt44Oj44Oz44OX44CN44Gr44Kz44Oh44Oz44OI44GM?=
+ =?utf-8?b?5LuY44GN44G+44GX44Gf?=
+From: webmaster@localhost
+To: carol@example.com
+Date: ...
+
+素敵な旅ですね
+-------------------------------------------------------------------------------
+```
+
+✅ 検証済み: 201。自分の記事へのコメントと、メールアドレスが空の人の記事では、何も出ない（`Subject` の中身は件名で変わる）
+
+`Subject` が読めない文字列になっているのは、壊れたのではありません。メールの見出し（ヘッダ）には英数字しか書けない決まりがあるので、日本語の件名を英数字に置き換えて（エンコードして）います。メールソフトが元に戻して表示します。
+
+**④ テスト**（`tests/test_comment_mail.py` 新規）
+
+要件だけ書きます。pytest-django の `mailoutbox` フィクスチャを引数に書くと、テスト中に「送ったメール」の一覧を受け取れます。
+
+1. 他人（bob、メールあり）の記事にコメントすると、bob 宛てに1通。件名に記事のタイトルが入る
+2. 自分の記事にコメントしても、0通
+3. メールアドレスが空の人の記事なら、0通
+
+<details><summary>解答例</summary>
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Post
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_mail_to_post_author(auth_headers: dict[str, str], mailoutbox) -> None:
+    # bob の記事に、alice（auth_headers の持ち主）がコメントする
+    bob = User.objects.create_user(username="bob", password="pass1234", email="bob@example.com")
+    post = Post.objects.create(title="京都旅行", body="b", author=bob)
+    client.post(f"/posts/{post.id}/comments", json={"body": "いいですね"}, headers=auth_headers)
+
+    assert len(mailoutbox) == 1  # テスト中のメールは送られずに、ここに溜まる
+    assert mailoutbox[0].to == ["bob@example.com"]
+    assert "京都旅行" in mailoutbox[0].subject
+
+
+def test_no_mail_for_own_post(user: User, auth_headers: dict[str, str], mailoutbox) -> None:
+    user.email = "alice@example.com"
+    user.save()
+    post = Post.objects.create(title="t", body="b", author=user)
+    client.post(f"/posts/{post.id}/comments", json={"body": "自分で"}, headers=auth_headers)
+    assert len(mailoutbox) == 0
+
+
+def test_no_mail_without_address(auth_headers: dict[str, str], mailoutbox) -> None:
+    bob = User.objects.create_user(username="bob", password="pass1234")  # email なし
+    post = Post.objects.create(title="t", body="b", author=bob)
+    client.post(f"/posts/{post.id}/comments", json={"body": "x"}, headers=auth_headers)
+    assert len(mailoutbox) == 0
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`36 passed`。ruff・mypy も通過）
+
+> 💡補足: テスト中は、①の設定があっても画面には出ない。Django がテストの間だけ、メールバックエンドを「メモリに溜めるだけ」のもの（`locmem`）に差し替えるから。`mailoutbox` は、その溜まった一覧（根拠: https://docs.djangoproject.com/en/5.2/topics/testing/tools/#email-services）。
+
+### 13-2. 🔬 仕組み解剖
+
+| | `send_mail()` | `EMAIL_BACKEND` |
+| --- | --- | --- |
+| 正式名称 | `django.core.mail.send_mail` | `settings.EMAIL_BACKEND`（メールバックエンド） |
+| いつ・誰が | 呼んだその場で、Django がメールを組み立て、バックエンドに渡す。渡し終わるまで、レスポンスは返らない | `send_mail()` を呼ぶたびに、Django がこの設定を読んで届け先の部品を決める |
+| 発行される SQL | `post.author` の SELECT が1本増える（下）。メール自体は SQL を出さない | なし |
+| TS での対応物 | 対応物なし（Node なら nodemailer の `sendMail` が近い。既知スタックの外） | 対応物なし |
+| なぜこの設計 | 宛先・件名・本文だけ渡せばよい。届け方を知らなくてよい | 送る側のコードを1行も変えずに、開発は画面、テストはメモリ、本番は SMTP に差し替えられる |
+| 失敗すると | 届け先のサーバに繋がらないと例外（`ConnectionRefusedError` など）で 500。件名に改行があると `BadHeaderError`（下の 🔮） | 名前を間違えると、`send_mail()` を呼んだ時点で `ModuleNotFoundError`（500） |
+
+✅ 検証済み: Django 5.2.17（SQL は `CaptureQueriesContext` で確認）
+
+```text
+                       send_mail(...)
+                             |
+                     EMAIL_BACKEND = ?
+          +------------------+------------------+
+          |                  |                  |
+       console             locmem              smtp
+   (runserver screen)   (mailoutbox)     (real mail server)
+     development           tests            production
+```
+
+✅ 検証済み: console と locmem はこのステップで動かした。smtp は既定の値（`EMAIL_BACKEND` を書かなかったとき）
+
+見てほしいのは、`send_mail(...)` の1行は3つとも同じ点です。変わるのは、設定の1行だけです。
+
+コメント1件の SQL は5本です。身分証の User、記事、コメントの INSERT、**記事を書いた人（`post.author`）**、返信の一覧（レスポンス用）。4本目が、このステップで増えた分です。
+
+### 13-3. 🐍 Python注
+
+> 🐍 **Python注**: `a and b and c` は、左から見て**偽が出たところで止まる**（TS の `&&` と同じ）。
+> `author is not None` が偽なら、`author.email` は読まれないので、`None.email` のエラーにならない。
+
+### 13-4. 解説 — なぜこう設計するか
+
+`from_email=None` にしたのは、差出人を設定（`DEFAULT_FROM_EMAIL`）に任せるためです。差出人は、送る場所ごとに書くより、1か所で決めたほうが揃います。
+
+🧠 Django の考え方: 「何を送るか」はコードに、「どう届けるか」は設定に書く。
+
+### 13-5. 🏢 実務メモ ／ 🔓 教材用の簡略化
+
+> 🏢 **実務メモ**: `send_mail()` は、渡し終わるまでレスポンスを止める。届け先が遅いと、コメントの API も遅くなる。失敗すると、コメントは保存済みなのに 500 が返る。本番では、レスポンスのあとで送る仕組み（拡張モジュール `celery`）に回す。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/email/#send-mail（`fail_silently=False` なら例外を出す）
+
+> 🔓 **教材用の簡略化**: メールは画面に出すだけで、どこにも送っていない。
+> **本番では**: SMTP バックエンドか、メール配信サービスを使う。接続先とパスワードは `.env` から読む。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/email/#smtp-backend
+
+### 13-6. 🔮 予測 → 動作確認
+
+1. 自分の記事に、自分でコメントすると、メールは出る？
+2. タイトルに改行が入った記事にコメントすると、どうなる？（コメントは保存される？）
+3. ①の設定を消すと、③の curl はどうなる？
+
+<details><summary>答え</summary>
+
+1. 出ない。`author.id != request.user.id` で外している
+2. `BadHeaderError` で 500 になる。**コメントは保存済み**（検証済み）。件名に改行を混ぜて、見出しを書き足す攻撃（ヘッダインジェクション）を、Django が止めている（根拠: https://docs.djangoproject.com/en/5.2/topics/email/#preventing-header-injection）
+3. 既定の SMTP バックエンドになり、`localhost:25` に繋がらずに `ConnectionRefusedError` で 500 になる。ここでもコメントは保存済み（検証済み）
+
+</details>
+
+### 13-7. ✅ 想起チェック
+
+1. 開発中とテスト中で、メールはそれぞれどこに行く？
+2. `send_mail()` の呼び方を変えずに、本物のメールを送るには何を変える？
+
+<details><summary>答え</summary>
+
+1. 開発中は `runserver` の画面（console）、テスト中はメモリ（locmem。`mailoutbox` で見える）
+2. `EMAIL_BACKEND`（と、SMTP の接続先）の設定だけ
+
+</details>
+
+### 13-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`send_mail()` で送り、届け先は `EMAIL_BACKEND` の1行で差し替える。**
+
+📒 用語集に追記: メールバックエンド / `send_mail()` / SMTP / ヘッダインジェクション
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第2部 ステップ14` — ソフトデリート
