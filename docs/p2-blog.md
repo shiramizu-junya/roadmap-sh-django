@@ -3323,3 +3323,246 @@ def test_no_mail_without_address(auth_headers: dict[str, str], mailoutbox) -> No
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第2部 ステップ14` — ソフトデリート
+
+---
+
+## 第2部-14: ソフトデリート
+
+**❓ この回の問い**: 2-7 で記事を消せるようにした。でも消した記事は台帳から無くなり、間違えて消しても戻せない。消したことにして、行は残せない？
+
+**作るもの**: `DELETE /api/posts/{post_id}` で行は残り、一覧や詳細からは見えなくなる
+**重要度**: 🟡 読めればよい — 書くのは1回だが、「消しても戻せる」サービスの裏側でよく出会う
+**前ステップとの接続**: 2-7 の `delete_post` の「本当に消す」を、「消した印を付ける」に変える
+
+### 14-0. このステップの初出
+
+**Django / Ninja**: 抽象モデル（`abstract = True`）, カスタムマネージャ / **Python**: `super()`
+
+> 🧒 **かみくだくと**: **ソフトデリート**は、行を消さずに「消した印」（ここでは消した日時）を書き込むこと。
+> 台帳には残るので戻せる。ふだんの検索で、印の付いた行を外して見せる。
+
+> 🧒 **かみくだくと**: **マネージャ**は、`Post.objects` の `objects` のこと。台帳を引くときの**窓口**で、どの行を見せるかを決められる。
+
+### 14-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① ソフトデリートの部品を作る**（`blog/models.py`。import を1行足し、`class Category` の**上**に追加）
+
+import の1行（`from django.db import models` の下に足す）
+
+```python
+from django.utils import timezone
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+`class Category` の上に追加
+
+```python
+class AliveManager(models.Manager):
+    # ふだん使う窓口。消した印（deleted_at）が付いていない行だけを返す
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+
+class SoftDeleteModel(models.Model):
+    deleted_at = models.DateTimeField(null=True, blank=True)  # 消した日時。消していなければ空
+
+    # 先に書いた窓口が「既定の窓口」になる。get_object_or_404 や管理画面はこちらを使う
+    objects = AliveManager()  # Post.objects: 消していない行だけ
+    all_objects = models.Manager()  # noqa: DJ012  Post.all_objects: 消した行も含めて全部
+
+    class Meta:
+        abstract = True  # この台帳（テーブル）は作らない。継承したモデルに項目を配るだけ
+
+    def soft_delete(self) -> None:
+        # 行は消さずに、消した日時を書き込む
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["deleted_at"])
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+> 💡補足: `# noqa: DJ012` は、ruff の「並び順のチェック」をこの行だけ止める印。ruff は `models.Manager()` を項目と見間違えて「項目は窓口より先に書け」と言う。でも、ここは `objects` を先に書かないと、既定の窓口が `all_objects` になってしまう。窓口は、書く順番に意味がある。
+
+`class Post` の1行目だけを置き換える（中身はそのまま）
+
+```python
+class Post(SoftDeleteModel):
+```
+
+✅ 検証済み: `Post` は `deleted_at`・`objects`・`all_objects`・`soft_delete()` を受け継ぐ
+
+```bash
+uv run python manage.py makemigrations blog
+SQL_LOG=0 uv run python manage.py sqlmigrate blog 0007
+uv run python manage.py migrate
+```
+
+```sql
+ALTER TABLE `blog_post` ADD COLUMN `deleted_at` datetime(6) NULL;
+```
+
+✅ 検証済み: MySQL 8.4.11（`blog_softdeletemodel` という台帳はできない）
+
+**② 削除 API を書き換える**（`blog/api.py` の `delete_post` の中の1行を置き換える）
+
+```diff
+-    post.delete()
++    post.soft_delete()  # 行は残して、消した印だけ付ける
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+**③ 試す**（記事の id は自分の記事のもの。`ACCESS` は直前に入れ直す）
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X DELETE http://127.0.0.1:8000/api/posts/7 \
+  -H "Authorization: Bearer $ACCESS"
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/api/posts/7
+# 台帳には残っているか、全部見える窓口で確かめる
+SQL_LOG=0 uv run python manage.py shell -c "from blog.models import Post; print(Post.all_objects.filter(deleted_at__isnull=False).values_list('id', 'title', 'deleted_at'))"
+```
+
+```text
+204
+404
+<QuerySet [(7, '自分の記事', datetime.datetime(2026, 10, 19, ...))]>
+```
+
+✅ 検証済み: 削除は 204、そのあとの詳細は 404。一覧からも消え、管理画面の Posts にも出なくなる
+
+削除の SQL は `DELETE` ではなく `UPDATE` です。
+
+```sql
+UPDATE `blog_post` SET `deleted_at` = '2026-10-19 13:56:30.103910' WHERE `blog_post`.`id` = 7;
+```
+
+✅ 検証済み: MySQL 8.4.11（`CaptureQueriesContext` で確認）
+
+**④ テスト**（`tests/test_soft_delete.py` 新規）
+
+要件だけ書きます。2-7 の `test_delete_then_404` は、何も変えずにそのまま通ります。
+
+1. 削除すると 204。`Post.objects` からは0件、`Post.all_objects` には1件残り、`deleted_at` が入っている
+2. 2件のうち1件を消すと、一覧には残した方だけ。消した方の詳細は 404
+
+<details><summary>解答例</summary>
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Post
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_delete_keeps_row(user: User, auth_headers: dict[str, str]) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    assert client.delete(f"/posts/{post.id}", headers=auth_headers).status_code == 204
+
+    assert Post.objects.count() == 0  # ふだんの窓口からは見えない
+    assert Post.all_objects.count() == 1  # 行は残っている
+    assert Post.all_objects.get(id=post.id).deleted_at is not None  # 消した日時が入った
+
+
+def test_deleted_post_is_hidden(user: User, auth_headers: dict[str, str]) -> None:
+    alive = Post.objects.create(title="残す", body="b", author=user)
+    gone = Post.objects.create(title="消す", body="b", author=user)
+    client.delete(f"/posts/{gone.id}", headers=auth_headers)
+
+    assert [p["title"] for p in client.get("/posts").json()["items"]] == [alive.title]
+    assert client.get(f"/posts/{gone.id}").status_code == 404
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`38 passed`。ruff・mypy も通過）
+
+### 14-2. 🔬 仕組み解剖
+
+| | 抽象モデル（`abstract = True`） | カスタムマネージャ |
+| --- | --- | --- |
+| 正式名称 | abstract base classes（`class Meta: abstract = True`） | custom managers（`get_queryset()` の上書き） |
+| いつ・誰が | 起動時に Django が、親の項目と窓口を子（`Post`）に写す。マイグレーションでは親の台帳を作らず、子の台帳に `deleted_at` 列を足す | `Post.objects.〜` を書くたびに、Django が `get_queryset()` を呼び、条件付きの QuerySet から始める |
+| 発行される SQL | `ALTER TABLE blog_post ADD COLUMN deleted_at ...` | `Post.objects` を使う SQL すべてに `WHERE deleted_at IS NULL` が付く（一覧の `COUNT(*)` にも） |
+| TS での対応物 | `abstract class` を `extends` するのに近い。ただし DB の列まで配るのは ORM の機能 | 対応物なし（ORM の機能） |
+| なぜこの設計 | `deleted_at` と窓口を、第3部の Product などにも1行（継承）で配れる | 「消した行を外す」を毎回 `filter()` に書くと、どこかで必ず書き忘れる。窓口に1回だけ書く |
+| 失敗すると | `abstract = True` を書き忘れると、`blog_softdeletemodel` という台帳ができ、Post と一対一でつながる別の仕組み（多テーブル継承）になる | `get_queryset()` で `return` を書き忘れると、`Post.objects.all()` が `None` になり、`.count()` などで `AttributeError`（500） |
+
+✅ 検証済み: Django 5.2.17（`Post._default_manager` は `objects`。「失敗すると」の2つは、わざと書き換えて確認）
+
+```text
+          SoftDeleteModel (abstract: no table)
+          - deleted_at
+          - objects      = AliveManager()   -> WHERE deleted_at IS NULL
+          - all_objects  = models.Manager() -> (no condition)
+          - soft_delete()
+                       |
+                       |  class Post(SoftDeleteModel)
+                       v
+          Post  (table: blog_post)
+          - title, body, ... + deleted_at
+```
+
+✅ 検証済み: ①のモデルと 0007 のマイグレーション
+
+見てほしいのは、親には台帳が無く、項目と窓口だけが子に下りてくる点です。1-2 の `AbstractUser` も、同じ仕組みで User に項目を配っていました。
+
+### 14-3. 🐍 Python注
+
+> 🐍 **Python注**: `super().get_queryset()` は、親クラス（`models.Manager`）の同じ名前のメソッドを呼ぶ。
+> 親が作った「全部の行」に、`filter()` を1つ足して返している（TS の `super.method()` と同じ）。
+
+### 14-4. 解説 — なぜこう設計するか
+
+`delete()` を上書きせず、`soft_delete()` という別の名前にしました。`delete()` の名前のままだと、「本当に消えた」と読み間違えるからです。どちらの消し方かが、呼ぶ側のコードで読めます。
+
+🧠 Django の考え方: 「いつも付ける条件」は、毎回書かずにマネージャに1回だけ書く。
+
+### 14-5. ⚠️ アンチパターン
+
+> ⚠️ **アンチパターン**: ソフトデリートにしたつもりで、`Post.objects.filter(...).delete()` を使う。QuerySet の `delete()` は、モデルの `soft_delete()` を通らずに、**本当に消す**。管理画面の削除も同じく本当に消す。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/queries/#deleting-objects
+
+### 14-6. 🔮 予測 → 動作確認
+
+1. ソフトデリートした記事に付いていたコメントで、`comment.post` を読むとどうなる？
+2. カテゴリ「生活」の記事を全部ソフトデリートしたあと、カテゴリ「生活」を消せる？
+3. 消した記事を戻すには、どうする？
+
+<details><summary>答え</summary>
+
+1. 読める。リレーションをたどるときは、既定の窓口ではなく、条件の無い窓口（`_base_manager`）が使われる（検証済み）
+2. 消せない（`ProtectedError`）。行は残っていて、まだカテゴリを指しているから。2-2 の `PROTECT` が効く（検証済み）
+3. `Post.all_objects.filter(id=7).update(deleted_at=None)`。印を消すだけで、一覧に戻る
+
+</details>
+
+### 14-7. ✅ 想起チェック
+
+1. `class Meta: abstract = True` を付けると、何が起きない？
+2. `Post.objects` と `Post.all_objects` は、何が違う？
+
+<details><summary>答え</summary>
+
+1. 親の台帳（テーブル）が作られない。項目と窓口が、継承した子に配られるだけ
+2. `objects` は消していない行だけ（`WHERE deleted_at IS NULL`）、`all_objects` は消した行も含めて全部
+
+</details>
+
+### 14-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **共通の項目は抽象モデルで配り、「いつも付ける条件」はマネージャの `get_queryset()` に1回だけ書く。**
+
+📒 用語集に追記: ソフトデリート / マネージャ / `abstract = True` / `get_queryset()`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M2: 第2部` — 白紙再現と宿題（第2部のまとめ）

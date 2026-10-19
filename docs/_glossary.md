@@ -86,3 +86,7 @@
 | `send_mail()` | django.core.mail.send_mail | 件名・本文・差出人・宛先を渡してメールを送る。届け方は `EMAIL_BACKEND` に任せる | 第2部-13 |
 | SMTP | Simple Mail Transfer Protocol | メールをサーバからサーバへ送る決まり。Django の既定のバックエンドは `localhost:25` の SMTP サーバに渡す | 第2部-13 |
 | ヘッダインジェクション | header injection | 件名などに改行を混ぜて、メールの見出しを勝手に書き足す攻撃。Django は改行を見つけると `BadHeaderError` で止める | 第2部-13 |
+| ソフトデリート | soft delete | 行を消さずに「消した印」（`deleted_at` など）を書き込むこと。台帳に残るので戻せる | 第2部-14 |
+| マネージャ | Manager（`Post.objects`） | 台帳を引くときの窓口。最初に書いたものが既定の窓口になり、`get_object_or_404` や管理画面が使う | 第2部-14 |
+| `abstract = True` | abstract base classes | `class Meta` に書くと、そのモデルの台帳は作られず、項目と窓口が継承した子に配られる。1-2 の `AbstractUser` も同じ仕組み | 第2部-14 |
+| `get_queryset()` | Manager.get_queryset() | 窓口が最初に作る QuerySet。上書きして `filter()` を足すと、その窓口を使う SQL すべてに条件が付く | 第2部-14 |
