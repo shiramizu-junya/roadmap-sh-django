@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from django.core.files.images import get_image_dimensions
+from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
@@ -138,6 +139,16 @@ def create_comment(request: HttpRequest, post_id: int, payload: CommentIn):
     comment = Comment.objects.create(
         post=post, author=request.user, parent=parent, body=payload.body
     )
+    # 記事を書いた人に知らせる（自分の記事へのコメントと、メールアドレスが無い人は除く）
+    author = post.author
+    if author is not None and author.email and author.id != request.user.id:
+        send_mail(
+            subject=f"「{post.title}」にコメントが付きました",
+            message=comment.body,
+            from_email=None,  # None なら DEFAULT_FROM_EMAIL（既定は webmaster@localhost）
+            recipient_list=[author.email],
+        )
+
     return Status(201, comment)
 
 

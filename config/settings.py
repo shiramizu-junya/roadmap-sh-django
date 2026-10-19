@@ -165,3 +165,6 @@ LOGGING = {
         },
     },
 }
+
+# メールは送らずに、runserver の画面（コンソール）に出す
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
