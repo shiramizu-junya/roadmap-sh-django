@@ -3566,3 +3566,486 @@ def test_deleted_post_is_hidden(user: User, auth_headers: dict[str, str]) -> Non
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M2: 第2部` — 白紙再現と宿題（第2部のまとめ）
+
+
+---
+
+## 第2部のまとめ（M2）— 白紙再現と宿題
+
+ここまでで、ブログ API が一通りそろいました。最後に、**思い出して書く練習**をして定着させます。
+
+> ✍️ **翌日にやってください。** 書いた直後だと、短い記憶だけで書けてしまい、練習になりません。
+
+### 1. 白紙再現（3段階から選ぶ）
+
+| 段階 | やること | 判定 |
+| --- | --- | --- |
+| **Lv1 穴埋め** | 下のコードの `____` を埋める | `uv run pytest` が `38 passed` |
+| **Lv2 ファイル単位** | `blog/api.py` を閉じ、白紙から書き直す（`blog/models.py` でもよい） | `uv run pytest` が `38 passed`、ruff・mypy も通る |
+| **Lv3 構成から** | 要件だけを見て、どのファイルに何を書くかから組み立てる | 同上 |
+
+> ✍️ まず Lv1 から。できたら次回 Lv2 に上げる。
+> 思い出せなかった箇所に印を付け、**その箇所の 🔬 仕組み解剖だけ**読み返してください。
+
+#### Lv1 穴埋め
+
+`blog/api.py` を別名で退避（`cp blog/api.py /tmp/api.py.bak`）してから、次のコードを**全文**貼って `____` を埋めます。同じ番号には同じ言葉が入ります。
+
+```python
+from datetime import datetime
+
+from django.core.files.images import get_image_dimensions
+from django.core.mail import ____⑪____
+from django.db.models import Q
+from django.http import HttpRequest
+from django.shortcuts import get_object_or_404
+from ninja import Field, Router, Schema, Status, ____⑮____
+from ninja.errors import HttpError
+from ninja.pagination import ____①____
+from ninja_jwt.authentication import ____⑥____
+
+from .models import Category, Comment, Post, PostImage, Tag
+
+# 記事の API 一式。URL の頭（/posts）は config/api.py で決める
+router = Router()
+
+
+class PostIn(Schema):
+    title: str = Field(max_length=200)
+    body: str
+    category_id: int | None = None  # 省略したらカテゴリなし
+    tag_ids: list[int] = []  # 付けるタグの id。省略したらタグなし
+
+
+class TagOut(Schema):
+    id: int
+    name: str
+
+
+class CategoryOut(Schema):
+    id: int
+    name: str
+
+
+class PostPatch(Schema):
+    title: str | None = Field(default=None, max_length=200)
+    body: str | None = None
+
+
+class PostOut(Schema):
+    id: int
+    title: str
+    body: str
+    created_at: datetime
+    category_id: int | None
+    tags: list[TagOut]  # 入れ子: 記事の中にタグの一覧を入れて返す
+    category: CategoryOut | None  # 入れ子: カテゴリの名前も返す
+    author_id: int | None  # 書いた人の id（既存の記事は null）
+
+
+@router.get("", response=list[PostOut])
+@____①____  # ?limit= と ?offset= を受け取り、{"items": [...], "count": 全件数} の形で返す
+def list_posts(request: HttpRequest, q: str | None = None, category_id: int | None = None):
+    posts = (
+        Post.objects.____②____("category")  # カテゴリは JOIN で同じ SQL に入れる
+        .____③____("tags")  # タグは別の SQL 1本でまとめて取る
+        .____④____("-created_at", "-id")  # 新しい順。作成時刻が同じなら id の大きい順
+    )
+    if q:
+        # タイトルか本文のどちらかに q を含む記事（大文字・小文字は区別しない）
+        posts = posts.filter(Q(____⑤____=q) | Q(body__icontains=q))
+    if category_id is not None:
+        posts = posts.filter(category_id=category_id)
+    return posts
+
+
+@router.post("", response={201: PostOut}, auth=____⑥____())  # 身分証が無ければ 401
+def create_post(request: HttpRequest, payload: PostIn):
+    category = None
+    if payload.category_id is not None:
+        category = get_object_or_404(Category, id=payload.category_id)
+    # 無いタグが1つでもあれば 404（記事を作る前に確かめる）
+    tags = [get_object_or_404(Tag, id=tag_id) for tag_id in payload.tag_ids]
+    post = Post.objects.create(
+        title=payload.title,
+        body=payload.body,
+        category=category,
+        # 身分証の持ち主を、書いた人にする。author=request.user だと mypy が型違いを指摘する
+        author_id=request.user.id,
+    )
+    post.tags.____⑦____(tags)
+    return Status(201, post)
+
+
+@router.get("/{post_id}", response=PostOut)
+def get_post(request: HttpRequest, post_id: int):
+    return get_object_or_404(Post, id=post_id)
+
+
+@router.patch("/{post_id}", response=PostOut, auth=____⑥____())
+def update_post(request: HttpRequest, post_id: int, payload: PostPatch):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事しか変更できません")
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    for name, value in changes.items():
+        setattr(post, name, value)
+    post.save()
+    return post
+
+
+@router.delete("/{post_id}", response={204: None}, auth=____⑥____())
+def delete_post(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(____⑧____, "自分の記事しか削除できません")
+    post.____⑨____()  # 行は残して、消した印だけ付ける
+    return Status(204, None)
+
+
+class CommentIn(Schema):
+    body: str = Field(min_length=1)
+    parent_id: int | None = None  # 返信なら返信先のコメントの id
+
+
+class ReplyOut(Schema):
+    id: int
+    author_id: int
+    body: str
+    created_at: datetime
+
+
+class CommentOut(ReplyOut):
+    replies: list[ReplyOut]  # 入れ子: このコメントへの返信
+
+
+@router.post("/{post_id}/comments", response={201: CommentOut}, auth=____⑥____())
+def create_comment(request: HttpRequest, post_id: int, payload: CommentIn):
+    post = get_object_or_404(Post, id=post_id)
+    parent = None
+    if payload.parent_id is not None:
+        # 返信先は、同じ記事のコメントに限る（違う記事なら 404）
+        parent = get_object_or_404(Comment, id=payload.parent_id, post=post)
+        if parent.parent_id is not None:
+            raise HttpError(400, "返信には返信できません")
+    # ____⑥____ を通ったので必ずログイン済み。mypy に「User だ」と伝える
+    assert request.user.____⑩____
+    comment = Comment.objects.create(
+        post=post, author=request.user, parent=parent, body=payload.body
+    )
+    # 記事を書いた人に知らせる（自分の記事へのコメントと、メールアドレスが無い人は除く）
+    author = post.author
+    if author is not None and author.email and author.id != request.user.id:
+        ____⑪____(
+            subject=f"「{post.title}」にコメントが付きました",
+            message=comment.body,
+            from_email=None,  # None なら DEFAULT_FROM_EMAIL（既定は webmaster@localhost）
+            recipient_list=[author.email],
+        )
+
+    return Status(201, comment)
+
+
+@router.get("/{post_id}/comments", response=list[CommentOut])
+def list_comments(request: HttpRequest, post_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    # post.comments: related_name で付けた、記事からコメントへの入口
+    return post.____⑫____.filter(parent=None).prefetch_related("____⑬____")
+
+
+class PostImageOut(Schema):
+    id: int
+    url: str = Field(____⑭____="image.url")  # 保存したファイルを見に行く URL
+
+
+@router.post("/{post_id}/images", response={201: PostImageOut}, auth=____⑥____())
+def upload_image(request: HttpRequest, post_id: int, file: ____⑮____):
+    post = get_object_or_404(Post, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事にしか画像を付けられません")
+    # 大きすぎるファイルは断る（size は不明のとき None になりうる）
+    if file.size is None or file.size > 2 * 1024 * 1024:
+        raise HttpError(400, "画像は 2MB までです")
+    # Pillow で中身を読んで、本当に画像か確かめる（画像でなければ幅と高さが None）
+    width, _ = get_image_dimensions(file)
+    if width is None:
+        raise HttpError(400, "画像ファイルを送ってください")
+    post_image = PostImage.objects.create(post=post, image=file)
+    return Status(201, post_image)
+```
+
+⚠️ 未実行（穴埋め用のため、このままでは動かない。検証手順: 埋めたあと `uv run pytest`）
+
+<details><summary>答え</summary>
+
+① `paginate`（2-12）
+② `select_related`（2-4）
+③ `prefetch_related`（2-4）
+④ `order_by`（2-12）
+⑤ `title__icontains`（2-11）
+⑥ `JWTAuth`（2-7）
+⑦ `set`（2-3）
+⑧ `403`（2-7）
+⑨ `soft_delete`（2-14）
+⑩ `is_authenticated`（2-9）
+⑪ `send_mail`（2-13）
+⑫ `comments`（2-9 の `related_name`）
+⑬ `replies`（2-9 の `related_name`）
+⑭ `alias`（2-10）
+⑮ `UploadedFile`（2-10）
+
+埋めた全体は、第2部-14 までの `blog/api.py` と1文字違わず同じです（機械的に照合済み）。
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（`38 passed`）
+
+</details>
+
+終わったら、退避したファイルを戻してください（`cp /tmp/api.py.bak blog/api.py`）。
+
+#### Lv3 の要件
+
+- 記事はカテゴリ（多対一）・タグ（多対多）・書いた人を持つ。ユーザーには一対一のプロフィールがある
+- `/api/auth/register` で登録、`/api/auth/login` で JWT を受け取る。作成は要ログイン、更新・削除は本人だけ（403）
+- 一覧は `?q=`・`?category_id=` で絞り込め、新しい順に `limit` / `offset` で区切られる。SQL の本数は件数で増えない
+- 記事にコメントと返信（1段まで）、画像（2MB まで・中身を確認）を付けられる。コメントが付くと書いた人にメール（画面に出す）
+- 削除は行を残すソフトデリート。テスト38件（2-14 まで）が通る
+
+### 2. 宿題
+
+**宿題はブランチを切ってやってください。** 第3部は、第2部の終わりの状態から始まるためです。
+
+```bash
+git switch -c homework-p2   # 宿題用のブランチを作って移る
+# … 宿題をやる …
+git switch main             # 終わったら main に戻る
+```
+
+⚠️ 未実行（Git の操作のため。検証手順: `git branch` で今いるブランチを確認）
+
+#### Lv1 基礎確認 — タグで絞り込む
+
+**課題**: 一覧に `?tag=python` を足し、そのタグ名の付いた記事だけを返す。
+
+**ヒント**: 2-11 の 🔮 で、カテゴリ名で探すときの書き方を見た。リレーション先の項目も `__` でたどれる。
+
+**判定基準**:
+- 2-11 ⓪のデータで `curl -s "http://127.0.0.1:8000/api/posts?tag=python"` が、タグ python の付いた記事だけを返す
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`blog/api.py`（`def list_posts(...)` の1行を、この形に置き換える）
+
+```python
+def list_posts(
+    request: HttpRequest,
+    q: str | None = None,
+    category_id: int | None = None,
+    tag: str | None = None,
+):
+```
+
+`blog/api.py`（`list_posts` の `return posts` の**上**に追加）
+
+```python
+    if tag:
+        # リレーション先（タグ）の項目も、__ でたどって絞り込める
+        posts = posts.filter(tags__name=tag)
+```
+
+`tests/test_homework_p2_lv1.py`（新規）
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Post, Tag
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_filter_by_tag(user: User) -> None:
+    python = Tag.objects.create(name="python")
+    tagged = Post.objects.create(title="タグあり", body="b", author=user)
+    tagged.tags.set([python])
+    Post.objects.create(title="タグなし", body="b", author=user)
+
+    res = client.get("/posts?tag=python")
+    assert [p["title"] for p in res.json()["items"]] == ["タグあり"]
+    assert client.get("/posts?tag=none").json()["count"] == 0
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過。SQL は `INNER JOIN blog_post_tags ... INNER JOIN blog_tag ... WHERE blog_tag.name = 'python'`）
+
+根拠: https://docs.djangoproject.com/en/5.2/topics/db/queries/#lookups-that-span-relationships
+
+</details>
+
+#### Lv2 応用 — 自分のコメントを削除する
+
+**課題**: `DELETE /api/posts/{post_id}/comments/{comment_id}` を作る。ログイン必須で、消せるのは自分のコメントだけ。返信も一緒に消える。
+
+**ヒント**: 2-7 の「本人だけ」と、2-9 の「同じ記事のコメントに限る」を組み合わせる。返信が消えるのは、自分で書かなくても起きる（2-9 の `on_delete`）。
+
+**判定基準**:
+- 自分のコメントは 204 で、返信ごと消える
+- 他人のコメントは 403、別の記事のコメントは 404
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`blog/api.py`（`create_comment` の下、`list_comments` の上に追加）
+
+```python
+@router.delete("/{post_id}/comments/{comment_id}", response={204: None}, auth=JWTAuth())
+def delete_comment(request: HttpRequest, post_id: int, comment_id: int):
+    post = get_object_or_404(Post, id=post_id)
+    # この記事のコメントに限る（違う記事のコメントなら 404）
+    comment = get_object_or_404(Comment, id=comment_id, post=post)
+    if comment.author_id != request.user.id:
+        raise HttpError(403, "自分のコメントしか削除できません")
+    comment.delete()  # 返信も CASCADE で消える
+    return Status(204, None)
+```
+
+`tests/test_homework_p2_lv2.py`（新規）
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Comment, Post
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_delete_own_comment_with_replies(user: User, auth_headers: dict[str, str]) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    first = Comment.objects.create(post=post, author=user, body="最初")
+    Comment.objects.create(post=post, author=user, parent=first, body="返信")
+
+    res = client.delete(f"/posts/{post.id}/comments/{first.id}", headers=auth_headers)
+    assert res.status_code == 204
+    assert Comment.objects.count() == 0  # 返信も消えた
+
+
+def test_other_users_comment_is_403(user: User, auth_headers: dict[str, str]) -> None:
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    post = Post.objects.create(title="t", body="b", author=user)
+    comment = Comment.objects.create(post=post, author=bob, body="bob のコメント")
+
+    res = client.delete(f"/posts/{post.id}/comments/{comment.id}", headers=auth_headers)
+    assert res.status_code == 403
+    assert Comment.objects.count() == 1
+
+
+def test_comment_of_other_post_is_404(user: User, auth_headers: dict[str, str]) -> None:
+    post_a = Post.objects.create(title="a", body="b", author=user)
+    post_b = Post.objects.create(title="b", body="b", author=user)
+    comment = Comment.objects.create(post=post_b, author=user, body="b のコメント")
+
+    res = client.delete(f"/posts/{post_a.id}/comments/{comment.id}", headers=auth_headers)
+    assert res.status_code == 404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過）
+
+</details>
+
+#### Lv3 発展 — 消した記事を戻す
+
+**課題**: `POST /api/posts/{post_id}/restore` を作る。ログイン必須で、戻せるのは自分の記事だけ。戻した記事は一覧と詳細にまた出る。
+
+**ヒント**:
+- 2-14 の窓口を思い出す。`get_object_or_404(Post, ...)` は、消した記事を見つけられない。
+- `get_object_or_404` の第1引数には、モデルの代わりに窓口（マネージャ）も渡せる。
+
+**判定基準**:
+- 自分の消した記事を戻すと 200 で、そのあと `GET /api/posts/{post_id}` が 200
+- 他人の記事は 403（消えたまま）、無い id は 404
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`blog/api.py`（ファイルの最後に追加）
+
+```python
+@router.post("/{post_id}/restore", response=PostOut, auth=JWTAuth())
+def restore_post(request: HttpRequest, post_id: int):
+    # 既定の窓口（objects）では消した記事が見えないので、全部見える窓口から探す
+    post = get_object_or_404(Post.all_objects, id=post_id)
+    if post.author_id != request.user.id:
+        raise HttpError(403, "自分の記事しか戻せません")
+    post.deleted_at = None
+    post.save(update_fields=["deleted_at"])
+    return post
+```
+
+`tests/test_homework_p2_lv3.py`（新規）
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Post
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_restore_own_post(user: User, auth_headers: dict[str, str]) -> None:
+    post = Post.objects.create(title="t", body="b", author=user)
+    client.delete(f"/posts/{post.id}", headers=auth_headers)
+    assert client.get(f"/posts/{post.id}").status_code == 404
+
+    res = client.post(f"/posts/{post.id}/restore", headers=auth_headers)
+    assert res.status_code == 200
+    assert client.get(f"/posts/{post.id}").status_code == 200  # 一覧・詳細に戻った
+
+
+def test_restore_other_users_post_is_403(auth_headers: dict[str, str]) -> None:
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    post = Post.objects.create(title="t", body="b", author=bob)
+    post.soft_delete()
+
+    assert client.post(f"/posts/{post.id}/restore", headers=auth_headers).status_code == 403
+    assert Post.objects.count() == 0  # 消えたまま
+
+
+def test_restore_missing_post_is_404(auth_headers: dict[str, str]) -> None:
+    assert client.post("/posts/999/restore", headers=auth_headers).status_code == 404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（Lv1〜Lv3 を全部入れて `45 passed`。ruff・mypy も通過）
+
+`Post.all_objects` を `Post` に戻すと、自分の消した記事でも 404 になります。`get_object_or_404` は、モデルを渡されると既定の窓口（`objects`）で探すからです。
+根拠: https://docs.djangoproject.com/en/5.2/topics/http/shortcuts/#get-object-or-404
+
+</details>
+
+### 3. 第2部の終わりに
+
+**ここまでで、できるようになったこと**
+- 多対一・多対多・一対一・自己参照のリレーションを設計し、出る SQL と N+1 問題を読める
+- JWT でログインさせ、「誰か」（401）と「してよいか」（403）を分けて守れる
+- 検索・絞り込み・並び順・ページングの付いた一覧 API を、SQL の本数を増やさずに書ける
+- 画像・メール・ソフトデリートのように、「Django が用意した部品を差し替えて使う」書き方ができる
+- 変えるたびに、テストで動きを固定できる（38件）
+
+**ここで止めても成果物になります。** 手元には「登録・ログイン・権限・検索・ページング・画像・コメント・通知の付いたブログ API」が1本あり、テストが通っています。
+
+**第3部で増えるもの**
+- 商品・カート・注文の EC 風の機能と、`DecimalField` などお金を扱う型
+- **トランザクション**（2-8 の ⏭️ を 3-3 で回収）と、同時に買われても在庫が壊れない仕組み
+- `annotate()` による集計と、実行計画まで見るクエリの総点検
+
+第3部に進むかどうかは、ここで決めてください。
+分からないまま残った箇所は、`# TODO: わからん` の印だけ見返せば十分です。
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ1` — 商品と在庫 ／ または `MP: url-shortening-service`
