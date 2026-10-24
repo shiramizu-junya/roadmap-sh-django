@@ -90,3 +90,7 @@
 | マネージャ | Manager（`Post.objects`） | 台帳を引くときの窓口。最初に書いたものが既定の窓口になり、`get_object_or_404` や管理画面が使う | 第2部-14 |
 | `abstract = True` | abstract base classes | `class Meta` に書くと、そのモデルの台帳は作られず、項目と窓口が継承した子に配られる。1-2 の `AbstractUser` も同じ仕組み | 第2部-14 |
 | `get_queryset()` | Manager.get_queryset() | 窓口が最初に作る QuerySet。上書きして `filter()` を足すと、その窓口を使う SQL すべてに条件が付く | 第2部-14 |
+| `DecimalField` | DecimalField（`max_digits`・`decimal_places`） | お金のための数の項目。小数を10進数のまま持つので、端数がずれない。MySQL では `numeric(10, 2)` になる | 第3部-1 |
+| `Decimal` | decimal.Decimal（Python 標準） | 10進数の小数。必ず文字列から作る（`Decimal("2980")`）。API の JSON では `"2980.00"` という文字列で返る | 第3部-1 |
+| チェック制約 | CheckConstraint（`Meta.constraints`） | 台帳そのものに貼る決まり（例: 在庫は0以上）。破る書き込みは、どこから来ても MySQL が断る | 第3部-1 |
+| `IntegrityError` | django.db.IntegrityError | DB の決まり（制約・外部キー・UNIQUE）を破ったときに Django が投げる例外。API の中で起きると 500 | 第3部-1 |
