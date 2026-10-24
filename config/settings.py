@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "accounts",  # 追加: accounts アプリを登録する
     "blog",  # 追加: blog アプリを登録する
+    "shop",  # 追加: shop アプリを登録する
 ]
 
 MIDDLEWARE = [
