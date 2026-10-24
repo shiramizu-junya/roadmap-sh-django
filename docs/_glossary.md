@@ -94,3 +94,6 @@
 | `Decimal` | decimal.Decimal（Python 標準） | 10進数の小数。必ず文字列から作る（`Decimal("2980")`）。API の JSON では `"2980.00"` という文字列で返る | 第3部-1 |
 | チェック制約 | CheckConstraint（`Meta.constraints`） | 台帳そのものに貼る決まり（例: 在庫は0以上）。破る書き込みは、どこから来ても MySQL が断る | 第3部-1 |
 | `IntegrityError` | django.db.IntegrityError | DB の決まり（制約・外部キー・UNIQUE）を破ったときに Django が投げる例外。API の中で起きると 500 | 第3部-1 |
+| 一意制約 | UniqueConstraint（`Meta.constraints`） | 「この組み合わせの行は1つだけ」という台帳の決まり。破る書き込みは MySQL が 1062 Duplicate entry で断る | 第3部-2 |
+| `get_or_create()` | QuerySet.get_or_create() | 探して、無ければ作る。戻り値は `(行, 作ったか)`。一意制約がある項目で使うと、同時に呼ばれても行は1つ | 第3部-2 |
+| `defaults` | get_or_create(defaults=...) | `get_or_create()` で、新しく作るときだけ使う値。見つかったときは使われない | 第3部-2 |
