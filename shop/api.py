@@ -2,9 +2,10 @@ from decimal import Decimal
 
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
-from ninja import Field, Router, Schema
+from ninja import Field, Router, Schema, Status
+from ninja_jwt.authentication import JWTAuth
 
-from .models import Product
+from .models import Cart, CartItem, Product
 
 # 商品の API 一式。URL の頭（/products）は config/api.py で決める
 router = Router()
@@ -27,3 +28,50 @@ def list_products(request: HttpRequest):
 @router.get("/{product_id}", response=ProductOut)
 def get_product(request: HttpRequest, product_id: int):
     return get_object_or_404(Product.objects.select_related("inventory"), id=product_id)
+
+
+# カートの API 一式。URL の頭（/cart）は config/api.py で決める
+cart_router = Router()
+
+
+class CartItemIn(Schema):
+    product_id: int
+    quantity: int = Field(default=1, ge=1)  # 省略したら1個。0以下は 422
+
+
+class CartItemOut(Schema):
+    product_id: int
+    name: str = Field(alias="product.name")
+    price: Decimal = Field(alias="product.price")
+    quantity: int
+
+
+class CartOut(Schema):
+    items: list[CartItemOut]
+    total: Decimal  # 合計金額
+
+
+@cart_router.post("/items", response={201: CartItemOut}, auth=JWTAuth())
+def add_to_cart(request: HttpRequest, payload: CartItemIn):
+    product = get_object_or_404(Product, id=payload.product_id)
+    assert request.user.is_authenticated
+    # 自分のカートを取る。無ければ作る
+    cart, _ = Cart.objects.get_or_create(user=request.user)
+    # 同じ商品の行を取る。無ければ、入れた数で作る
+    item, created = CartItem.objects.get_or_create(
+        cart=cart, product=product, defaults={"quantity": payload.quantity}
+    )
+    if not created:
+        # もう入っていたら、行は増やさずに数を足す
+        item.quantity += payload.quantity
+        item.save()
+    return Status(201, item)
+
+
+@cart_router.get("", response=CartOut, auth=JWTAuth())
+def get_cart(request: HttpRequest):
+    assert request.user.is_authenticated
+    cart, _ = Cart.objects.get_or_create(user=request.user)
+    items = cart.items.select_related("product").order_by("id")
+    total = sum((item.product.price * item.quantity for item in items), Decimal("0"))
+    return {"items": items, "total": total}

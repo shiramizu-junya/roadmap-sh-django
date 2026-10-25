@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
@@ -45,3 +46,33 @@ class Inventory(models.Model):
 
     def __str__(self) -> str:
         return f"{self.product.name}: {self.quantity}"
+
+
+class Cart(models.Model):
+    # 一対一: 1人に、カートは1つ
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"{self.user_id} のカート"
+
+
+class CartItem(models.Model):
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.IntegerField()  # カートに入れた数
+
+    class Meta:
+        constraints = [
+            # 同じカートに、同じ商品の行は1つだけ（2回入れたら数を足す）
+            models.UniqueConstraint(
+                fields=["cart", "product"], name="shop_cartitem_unique_cart_product"
+            ),
+            # 数は1以上
+            models.CheckConstraint(
+                condition=Q(quantity__gte=1), name="shop_cartitem_quantity_gte_1"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product.name} x {self.quantity}"
