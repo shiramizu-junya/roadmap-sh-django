@@ -97,3 +97,7 @@
 | 一意制約 | UniqueConstraint（`Meta.constraints`） | 「この組み合わせの行は1つだけ」という台帳の決まり。破る書き込みは MySQL が 1062 Duplicate entry で断る | 第3部-2 |
 | `get_or_create()` | QuerySet.get_or_create() | 探して、無ければ作る。戻り値は `(行, 作ったか)`。一意制約がある項目で使うと、同時に呼ばれても行は1つ | 第3部-2 |
 | `defaults` | get_or_create(defaults=...) | `get_or_create()` で、新しく作るときだけ使う値。見つかったときは使われない | 第3部-2 |
+| トランザクション | transaction | いくつもの書き込みを「全部やるか、何もしないか」の1かたまりにすること。MySQL では `BEGIN` 〜 `COMMIT` / `ROLLBACK` | 第3部-3 |
+| `transaction.atomic` | django.db.transaction.atomic | `with` で囲んだ範囲を1つのトランザクションにする。ふつうに抜ければ確定、例外で抜ければ取り消し | 第3部-3 |
+| コミット / ロールバック | commit / rollback | コミットは書き込みの確定。ロールバックは取り消しで、`BEGIN` の前の台帳に戻る（ただし `AUTO_INCREMENT` の番号は戻らない） | 第3部-3 |
+| `bulk_create()` | QuerySet.bulk_create() | 何行もの INSERT を SQL 1本にまとめる。行ごとの `save()` は通らず、MySQL では作った行に `id` が入らない | 第3部-3 |

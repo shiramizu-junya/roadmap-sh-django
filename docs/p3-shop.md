@@ -683,3 +683,406 @@ def test_cart_needs_login(book: Product) -> None:
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ3` — 注文を確定する
+
+
+---
+
+## 第3部-3: 注文を確定する
+
+**❓ この回の問い**: 3-2 でカートができた。「注文する」は、注文を作る・明細を作る・在庫を減らす・カートを空にする、の4手。3手目で失敗したら、1手目と2手目はどうなる？
+
+**作るもの**: `POST /api/orders`。カートの中身を注文にし、買った時点の価格を明細に写して、在庫を減らす
+**重要度**: 🔴 毎日使う — 「いくつも書き込む処理」は、ほぼ必ずトランザクションで包む
+**前ステップとの接続**: 3-2 のカートを注文に変える。2-8 で先送りにした「User と Profile を別々に INSERT」も、ここで直す
+
+### 3-0. このステップの初出
+
+**Django / Ninja**: `transaction.atomic`, `bulk_create()` / **Python**: `with`
+
+> 🧒 **かみくだくと**: **トランザクション**（transaction）は、いくつもの書き込みを「全部やるか、何もしないか」の1かたまりにすること。台帳の書き換えを、最後にまとめて「確定」（コミット）する。途中で失敗したら「取り消し」（ロールバック）で、始める前の台帳に戻る。
+
+> 🧒 **かみくだくと**: **bulk_create()** は、何行もの INSERT を **SQL 1本**にまとめて送る命令。
+
+### 3-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① モデルを書く**（`shop/models.py` の**最後**に追加）
+
+```python
+class Order(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    total = models.DecimalField(max_digits=12, decimal_places=2)  # 合計金額（確定した時点）
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"注文 {self.id}"
+
+
+class OrderItem(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
+    # 注文の記録が残っている商品は消せない
+    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    # 買った時点の価格を写しておく。あとで商品の価格が変わっても、注文の金額は変わらない
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.IntegerField()
+
+    def __str__(self) -> str:
+        return f"{self.product.name} x {self.quantity}"
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+`shop/admin.py` は、import の1行を置き換え、最後に2行足す
+
+```python
+from .models import Cart, CartItem, Inventory, Order, OrderItem, Product, ProductImage
+```
+
+```python
+admin.site.register(Order)
+admin.site.register(OrderItem)
+```
+
+✅ 検証済み: Django 5.2.17
+
+```bash
+uv run python manage.py makemigrations shop
+uv run python manage.py migrate
+```
+
+✅ 検証済み: `shop/migrations/0003_order_orderitem.py` ができ、`shop_order`・`shop_orderitem` の2つの台帳ができる
+
+> 💡補足: `Order.user` は `PROTECT` にしました。注文の記録は、お金の記録です。ユーザーを消しても、注文が一緒に消えてはいけません。
+
+**② API を書く**（`shop/api.py`）
+
+import の行を、次のように直す（3か所）
+
+```diff
++from datetime import datetime
+ from decimal import Decimal
+
++from django.db import transaction
+ from django.http import HttpRequest
+```
+
+```diff
+ from ninja import Field, Router, Schema, Status
++from ninja.errors import HttpError
+ from ninja_jwt.authentication import JWTAuth
+```
+
+```diff
+-from .models import Cart, CartItem, Product
++from .models import Cart, CartItem, Order, OrderItem, Product
+```
+
+✅ 検証済み: ruff の import 順チェックも通過
+
+ファイルの**最後**（`get_cart` の下）に追加
+
+```python
+# 注文の API 一式。URL の頭（/orders）は config/api.py で決める
+order_router = Router()
+
+
+class OrderItemOut(Schema):
+    product_id: int
+    price: Decimal  # 買った時点の価格
+    quantity: int
+
+
+class OrderOut(Schema):
+    id: int
+    total: Decimal
+    created_at: datetime
+    items: list[OrderItemOut]
+
+
+@order_router.post("", response={201: OrderOut}, auth=JWTAuth())
+def place_order(request: HttpRequest):
+    assert request.user.is_authenticated
+    cart = get_object_or_404(Cart, user=request.user)
+    cart_items = list(cart.items.select_related("product__inventory"))
+    if not cart_items:
+        raise HttpError(400, "カートが空です")
+
+    # ここから下は「全部やるか、何もしないか」。途中で例外が出たら、全部取り消す
+    with transaction.atomic():
+        total = sum((ci.product.price * ci.quantity for ci in cart_items), Decimal("0"))
+        order = Order.objects.create(user=request.user, total=total)
+        # 注文の明細を、INSERT 1本でまとめて作る
+        OrderItem.objects.bulk_create(
+            [
+                OrderItem(
+                    order=order, product=ci.product, price=ci.product.price, quantity=ci.quantity
+                )
+                for ci in cart_items
+            ]
+        )
+        for ci in cart_items:
+            inventory = ci.product.inventory
+            if inventory.quantity < ci.quantity:
+                # 例外で with を抜けると、上で作った注文と明細も無かったことになる
+                raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")
+            inventory.quantity -= ci.quantity
+            inventory.save()
+        cart.items.all().delete()  # カートを空にする
+
+    return Status(201, order)
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+> 💡補足: `select_related("product__inventory")` の `__` は、2-11 と同じ「リレーションの先をたどる」印。カートの行 → 商品 → 在庫まで、JOIN で1本の SQL に入れる。
+
+`config/api.py` は、`cart_router` の import に `order_router` を足し、最後に1行足す
+
+```diff
+-from shop.api import cart_router
++from shop.api import cart_router, order_router
+```
+
+```python
+api.add_router("/orders", order_router, tags=["orders"])
+```
+
+✅ 検証済み: django-ninja 1.7.1
+
+**③ 2-8 の宿題を直す**（`accounts/api.py`）
+
+import を1行足す（`from django.contrib.auth import authenticate` の下）
+
+```python
+from django.db import transaction
+```
+
+`register` の中の、`create_user` と `Profile.objects.create` の3行を置き換える
+
+```python
+    # User と Profile は両方できるか、両方できないか（片方だけ残さない）
+    with transaction.atomic():
+        # create_user: パスワードをハッシュにしてから保存する
+        user = User.objects.create_user(username=payload.username, password=payload.password)
+        Profile.objects.create(user=user)  # 空のプロフィールを一緒に作る
+```
+
+✅ 検証済み: Django 5.2.17（2-8 のテストは何も変えずに通る）
+
+これで 2-8 の ⏭️ を回収しました。Profile の INSERT が失敗すると、User の INSERT も取り消されます。
+
+**④ 試す**（在庫は、商品 1 が `5`、商品 2 が `0`。`ACCESS` は入れ直す）
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/cart/items -H "Authorization: Bearer $ACCESS" \
+  -H "Content-Type: application/json" -d '{"product_id": 1, "quantity": 2}'
+curl -s -X POST http://127.0.0.1:8000/api/cart/items -H "Authorization: Bearer $ACCESS" \
+  -H "Content-Type: application/json" -d '{"product_id": 2}'
+curl -s -w " %{http_code}\n" -X POST http://127.0.0.1:8000/api/orders -H "Authorization: Bearer $ACCESS"
+```
+
+```text
+{"detail": "「Python ノート」の在庫が足りません"} 409
+```
+
+✅ 検証済み: 管理画面で見ると、Orders は0件。商品 1 の在庫も `5` のまま
+
+ログの SQL です。注文と明細の INSERT、在庫の UPDATE まで進んでから、**`ROLLBACK`** で全部取り消しています。
+
+```sql
+BEGIN;
+INSERT INTO `shop_order` (`user_id`, `total`, `created_at`) VALUES (1, 6410.50, '2026-10-25 04:20:07.679768');
+INSERT INTO `shop_orderitem` (`order_id`, `product_id`, `price`, `quantity`) VALUES (1, 1, 2980.00, 2), (1, 2, 450.50, 1);
+UPDATE `shop_inventory` SET `product_id` = 1, `quantity` = 3 WHERE `shop_inventory`.`id` = 1;
+ROLLBACK;
+```
+
+✅ 検証済み: MySQL 8.4.11（開発サーバの SQL ログ）
+
+管理画面の Cart items で商品 2 の行を消してから、もう一度注文します。
+
+```bash
+curl -s -w " %{http_code}\n" -X POST http://127.0.0.1:8000/api/orders -H "Authorization: Bearer $ACCESS"
+```
+
+```text
+{"id": 2, "total": "5960.00", "created_at": "2026-10-25T04:20:08.957Z", "items": [{"product_id": 1, "price": "2980.00", "quantity": 2}]} 201
+```
+
+```sql
+BEGIN;
+INSERT INTO `shop_order` (`user_id`, `total`, `created_at`) VALUES (1, 5960.00, '2026-10-25 04:20:08.957161');
+INSERT INTO `shop_orderitem` (`order_id`, `product_id`, `price`, `quantity`) VALUES (2, 1, 2980.00, 2);
+UPDATE `shop_inventory` SET `product_id` = 1, `quantity` = 3 WHERE `shop_inventory`.`id` = 1;
+DELETE FROM `shop_cartitem` WHERE `shop_cartitem`.`cart_id` = 1;
+COMMIT;
+```
+
+✅ 検証済み: MySQL 8.4.11（在庫は `3`、カートは空。注文の id が `2` なのは 🔮 の 3 で）
+
+**⑤ テスト**（`tests/test_orders.py` 新規）
+
+要件だけ書きます（`user`・`auth_headers` は `conftest.py` のもの）。
+
+1. 在庫5の商品を2個カートに入れて注文すると、201 で `total` は `"5960.00"`。在庫は `3`、カートは空
+2. 注文のあとで商品を値上げしても、明細の `price` は注文した時点の `2980` のまま
+3. 在庫5の商品を6個入れて注文すると、409。注文は0件で、カートの行は残る
+
+<details><summary>解答例</summary>
+
+```python
+from decimal import Decimal
+
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Cart, CartItem, Inventory, Order, Product
+
+client = TestClient(api)
+
+
+@pytest.fixture
+def book(db) -> Product:
+    category = Category.objects.create(name="本")
+    product = Product.objects.create(name="Django 入門", price=Decimal("2980"), category=category)
+    Inventory.objects.create(product=product, quantity=5)
+    return product
+
+
+def put_in_cart(user: User, product: Product, quantity: int) -> None:
+    cart, _ = Cart.objects.get_or_create(user=user)
+    CartItem.objects.create(cart=cart, product=product, quantity=quantity)
+
+
+def test_place_order(user: User, book: Product, auth_headers: dict[str, str]) -> None:
+    put_in_cart(user, book, 2)
+
+    res = client.post("/orders", headers=auth_headers)
+
+    assert res.status_code == 201
+    assert res.json()["total"] == "5960.00"
+    assert Inventory.objects.get(product=book).quantity == 3  # 5 - 2
+    assert CartItem.objects.count() == 0  # カートは空になる
+
+
+def test_price_is_copied(user: User, book: Product, auth_headers: dict[str, str]) -> None:
+    put_in_cart(user, book, 1)
+    client.post("/orders", headers=auth_headers)
+
+    book.price = Decimal("3500")  # 注文のあとで値上げ
+    book.save()
+
+    assert Order.objects.get().items.get().price == Decimal("2980")  # 注文の価格は変わらない
+
+
+def test_out_of_stock_rolls_back(user: User, book: Product, auth_headers: dict[str, str]) -> None:
+    put_in_cart(user, book, 6)  # 在庫は5
+
+    res = client.post("/orders", headers=auth_headers)
+
+    assert res.status_code == 409
+    assert Order.objects.count() == 0  # 先に作った注文も取り消された
+    assert CartItem.objects.count() == 1  # カートはそのまま
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`46 passed`。ruff・mypy も通過）
+
+### 3-2. 🔬 仕組み解剖
+
+| | `transaction.atomic` | `bulk_create()` |
+| --- | --- | --- |
+| 正式名称 | django.db.transaction.atomic | QuerySet.bulk_create() |
+| いつ・誰が | `with` に入るときに Django が `BEGIN` を送る。ふつうに抜けたら `COMMIT`、例外で抜けたら `ROLLBACK`。取り消すのは MySQL | 呼んだときに Django が、全部の行を `VALUES (...), (...)` の INSERT 1本にする |
+| 発行される SQL | `BEGIN` … `COMMIT` ／ `ROLLBACK` | `INSERT INTO shop_orderitem ... VALUES (1, 1, ...), (1, 2, ...)` |
+| TS での対応物 | 対応物なし（DB の機能）。Prisma の `$transaction` が同じ役目 | 対応物なし（ORM の機能）。Prisma の `createMany` が同じ役目 |
+| なぜこの設計 | Django は、ふだん1本ごとに確定する（自動コミット）。何本かを1かたまりにしたいところだけ、自分で囲む | 明細が10行なら、`create()` では SQL が10本。まとめれば1本で済む |
+| 失敗すると | `with` を書き忘れると、409 を返しても**注文の行は残る**（わざと外して確認）。例外を `with` の**中で** `try` して握りつぶすと、取り消されない | 行ごとの `save()` を通らない。MySQL では、作った行に `id` が入らない（`None`。確認済み） |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+```text
+  POST /api/orders
+     |
+     v
+  read cart (SELECT)
+     |
+     v
+  +--------- transaction.atomic() ----------+
+  | BEGIN                                   |
+  | INSERT order                            |
+  | INSERT order items (bulk_create)        |
+  | UPDATE inventory  -- not enough? -> 409 |---> ROLLBACK (all undone)
+  | DELETE cart items                       |
+  | COMMIT                                  |
+  +-----------------------------------------+
+     |
+     v
+  201
+```
+
+✅ 検証済み: ④の SQL ログ
+
+見てほしいのは、枠の中のどこで例外が出ても、出口が `ROLLBACK` の1本しかない点です。
+
+### 3-3. 🐍 Python注
+
+> 🐍 **Python注**: `with A:` は、「中に入るときに A の準備を、出るときに A の後片付けを必ずする」書き方。例外で出るときも、後片付けは必ず走る。
+> `transaction.atomic()` は、出るときの後片付けで `COMMIT` か `ROLLBACK` を選ぶ。
+
+### 3-4. 解説 — なぜこう設計するか
+
+明細には、商品の価格を**写して**持たせました。商品を指すだけにすると、値上げした日に、過去の注文の金額まで変わってしまいます。注文は「その時点の記録」なので、変わってはいけない値は写しておきます。
+
+🧠 Django の考え方: Django はふだん1本ずつ確定する。「全部か、何もしないか」にしたい範囲は、自分で `atomic` で囲む。
+
+> ⏭️ **後で回収**: 在庫の `inventory.quantity -= ...` → `save()` は、3-2 のカートと同じ「読んで、足して、書く」。最後の1個を2人が同時に注文すると、2人とも買えてしまう。トランザクションだけでは防げない。第3部-4 で実際に起こし、3-4・3-5 で直す。
+
+### 3-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 設定 `ATOMIC_REQUESTS = True` にすると、全部のリクエストを丸ごと1つのトランザクションで包める。ただし公式ドキュメントは、アクセスが増えると効率が落ちると注意している。この教材では、要るところだけ `atomic` で囲む。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/transactions/#tying-transactions-to-http-requests
+
+### 3-6. 🔮 予測 → 動作確認
+
+1. `place_order` から `with transaction.atomic():` を外して（中身は1段浅くして）、在庫の足りない注文を送ると？ ステータスコードと、Orders の件数は？
+2. カートが空のまま `POST /api/orders` すると？ カート自体がまだ無い人なら？
+3. ④で、2回目に成功した注文の id は `2` だった。注文は1件しか無いのに、なぜ `1` ではない？
+
+<details><summary>答え</summary>
+
+1. ステータスは同じ 409。でも Orders に1件、明細に2件が**残る**。在庫も1つ目の商品だけ減ったまま。1本ずつ確定してしまうから（検証済み）
+2. 空なら 400（`カートが空です`）。カートが無い人は、`get_object_or_404` で 404（検証済み）
+3. 取り消された1回目が、id の `1` を使ったから。MySQL の `AUTO_INCREMENT` の番号は、`ROLLBACK` しても戻らない（検証済み）
+
+</details>
+
+### 3-7. ✅ 想起チェック
+
+1. `with transaction.atomic():` の中で例外が出たら、Django は MySQL に何を送る？
+2. 明細（OrderItem）に、商品の価格を写して持たせるのはなぜ？
+
+<details><summary>答え</summary>
+
+1. `ROLLBACK`。`BEGIN` からあとの書き込みが、全部無かったことになる
+2. あとで商品の価格が変わっても、注文の金額を変えないため
+
+</details>
+
+### 3-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **いくつも書き込む処理は `transaction.atomic()` で囲む。途中で例外が出れば、全部取り消される。**
+
+📒 用語集に追記: トランザクション / `transaction.atomic` / コミット・ロールバック / `bulk_create()`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ4` — 同時に買うと壊れる
