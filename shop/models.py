@@ -76,3 +76,24 @@ class CartItem(models.Model):
 
     def __str__(self) -> str:
         return f"{self.product.name} x {self.quantity}"
+
+
+class Order(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    total = models.DecimalField(max_digits=12, decimal_places=2)  # 合計金額（確定した時点）
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"注文 {self.id}"
+
+
+class OrderItem(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
+    # 注文の記録が残っている商品は消せない
+    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    # 買った時点の価格を写しておく。あとで商品の価格が変わっても、注文の金額は変わらない
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.IntegerField()
+
+    def __str__(self) -> str:
+        return f"{self.product.name} x {self.quantity}"
