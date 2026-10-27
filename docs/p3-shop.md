@@ -1086,3 +1086,303 @@ def test_out_of_stock_rolls_back(user: User, book: Product, auth_headers: dict[s
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ4` — 同時に買うと壊れる
+
+
+---
+
+## 第3部-4: 同時に買うと壊れる
+
+**❓ この回の問い**: 3-3 で、在庫が足りなければ注文を全部取り消せるようになった。では、最後の1個を2人が**同時に**注文したら？ トランザクションは守ってくれる？
+
+**作るもの**: 「2人とも買えてしまう」を実際に起こす。`F()` 式で、在庫とカートの数を MySQL に計算させて直す
+**重要度**: 🔴 毎日使う — 「読んで、計算して、書く」は、アクセスが重なると必ず壊れる
+**前ステップとの接続**: 3-2 と 3-3 で宣言した ⏭️（カートの `+=`、在庫の `-=`）を、ここで回収する
+
+### 4-0. このステップの初出
+
+**Django / Ninja**: `F()` 式, `QuerySet.update()` / **Python**: なし
+
+> 🧒 **かみくだくと**: **F() 式**（F expression）は、「台帳に今書いてある値」を指す印。`F("quantity") - 1` と書くと、Django は Python で引き算せずに、`quantity = quantity - 1` という SQL を MySQL に送る。引き算は MySQL が、その瞬間の値でやる。
+
+> 🧒 **かみくだくと**: **update()** は、`filter()` で絞った行をまとめて書き換える命令。行を Python に読み込まずに、`UPDATE` 1本で済ませる。戻り値は、書き換えた行の数。
+
+### 4-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 壊れるのを見る**
+
+同時に来た2つのリクエストを、確実に重ねるため、**一時的に** 1 秒待たせます（`shop/api.py`）。
+
+ファイルの1行目に足す
+
+```python
+import time
+```
+
+`place_order` の `raise HttpError(400, "カートが空です")` の下に足す（`with` と同じ深さ）
+
+```python
+    time.sleep(1)  # 一時的: 2人が「在庫1」を読み終わるまで待つ
+```
+
+✅ 検証済み: Django 5.2.17（②のあとで消す）
+
+管理画面で、商品 1 の Inventory の quantity を `1` にします。2人目の bob を登録し、2人とも商品 1 をカートに入れます。
+
+```bash
+# bob を登録する（2-8 の API）
+curl -s -X POST http://127.0.0.1:8000/api/auth/register \
+  -H "Content-Type: application/json" -d '{"username": "bob", "password": "pass1234"}'
+
+# 2人の身分証を取る
+ACCESS=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "password": "pass1234"}' \
+  | uv run python -c "import json, sys; print(json.load(sys.stdin)['access'])")
+BOB=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "bob", "password": "pass1234"}' \
+  | uv run python -c "import json, sys; print(json.load(sys.stdin)['access'])")
+
+# 2人とも、商品 1 を1個カートに入れる
+for T in "$ACCESS" "$BOB"; do
+  curl -s -X POST http://127.0.0.1:8000/api/cart/items -H "Authorization: Bearer $T" \
+    -H "Content-Type: application/json" -d '{"product_id": 1}'
+done
+```
+
+同時に注文します。
+
+```bash
+curl -s -w " %{http_code}\n" -X POST http://127.0.0.1:8000/api/orders -H "Authorization: Bearer $ACCESS" &
+curl -s -w " %{http_code}\n" -X POST http://127.0.0.1:8000/api/orders -H "Authorization: Bearer $BOB" &
+wait
+```
+
+```text
+{"id": ..., "total": "2980.00", "created_at": ..., "items": [{"product_id": 1, "price": "2980.00", "quantity": 1}]} 201
+{"id": ..., "total": "2980.00", "created_at": ..., "items": [{"product_id": 1, "price": "2980.00", "quantity": 1}]} 201
+```
+
+✅ 検証済み: 在庫は `0`、Orders は**2件**。1個しか無いのに、2人とも買えた
+
+> 💡補足: 行末の `&` は「終わるのを待たずに次へ進む」（シェルの機能）。`wait` は、`&` で走らせたものが全部終わるまで待つ。これで2本がほぼ同時に出る。
+
+ログの SQL（2人ぶんを抜き出したもの）です。2人とも同じ `quantity = 0` を書いています。
+
+```sql
+UPDATE `shop_inventory` SET `product_id` = 1, `quantity` = 0 WHERE `shop_inventory`.`id` = 1;  -- alice
+COMMIT;
+UPDATE `shop_inventory` SET `product_id` = 1, `quantity` = 0 WHERE `shop_inventory`.`id` = 1;  -- bob
+COMMIT;
+```
+
+✅ 検証済み: MySQL 8.4.11（開発サーバの SQL ログ）
+
+**② 在庫を直す**（`shop/api.py`。`time.sleep` はまだ残す）
+
+import を2か所直す
+
+```diff
+ from django.db import transaction
++from django.db.models import F
+ from django.http import HttpRequest
+```
+
+```diff
+-from .models import Cart, CartItem, Order, OrderItem, Product
++from .models import Cart, CartItem, Inventory, Order, OrderItem, Product
+```
+
+`place_order` の中を2か所直す。まず、カートを読む行（在庫はもう読まない）
+
+```diff
+-    cart_items = list(cart.items.select_related("product__inventory"))
++    cart_items = list(cart.items.select_related("product"))
+```
+
+次に、`for ci in cart_items:` から `inventory.save()` までの7行を、まるごと置き換える
+
+```python
+        for ci in cart_items:
+            # 在庫が足りているときだけ減らす。比べるのも引くのも、MySQL が UPDATE 1本の中でやる
+            updated = Inventory.objects.filter(
+                product=ci.product, quantity__gte=ci.quantity
+            ).update(quantity=F("quantity") - ci.quantity)
+            if updated == 0:
+                # 例外で with を抜けると、上で作った注文と明細も無かったことになる
+                raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+> 💡補足: `quantity__gte` は 2-11 のフィールドルックアップ。`gte` は「以上」（greater than or equal）で、SQL では `>=` になる。
+
+在庫を `1` に戻し、①のカート投入と同時注文を、もう一度やります。
+
+```text
+{"id": ..., "total": "2980.00", "created_at": ..., "items": [...]} 201
+{"detail": "「Django 入門」の在庫が足りません"} 409
+```
+
+```sql
+UPDATE `shop_inventory` SET `quantity` = (`shop_inventory`.`quantity` - 1)
+  WHERE (`shop_inventory`.`product_id` = 1 AND `shop_inventory`.`quantity` >= 1);  -- alice: 1行
+COMMIT;
+UPDATE `shop_inventory` SET `quantity` = (`shop_inventory`.`quantity` - 1)
+  WHERE (`shop_inventory`.`product_id` = 1 AND `shop_inventory`.`quantity` >= 1);  -- bob: 0行
+ROLLBACK;
+```
+
+✅ 検証済み: MySQL 8.4.11（在庫は `0`、Orders は1件。bob のカートは残る）
+
+確かめたら、①で足した `import time` と `time.sleep(1)` の2行を**消します**。
+
+**③ カートの足し算も直す**（`shop/api.py` の `add_to_cart`）
+
+`if not created:` の中の3行を置き換える
+
+```python
+    if not created:
+        # もう入っていたら、行は増やさずに数を足す。足し算は MySQL にさせる
+        CartItem.objects.filter(id=item.id).update(quantity=F("quantity") + payload.quantity)
+        item = CartItem.objects.get(id=item.id)  # 足したあとの数を読み直す
+```
+
+✅ 検証済み: Django 5.2.17（3-2 のテストは何も変えずに通る）
+
+`update()` は MySQL に書くだけで、手元の `item` の数は古いままです。返す前に、もう一度読み直します。
+
+**④ テスト**（`tests/test_orders.py` の最後に追加）
+
+要件だけ書きます。
+
+1. 在庫を1にして、alice と bob の2人が商品をカートに入れる
+2. alice が注文すると 201、続けて bob が注文すると 409
+3. 在庫は `0` のまま（マイナスにならない）
+
+<details><summary>解答例</summary>
+
+```python
+def test_last_one_is_sold_only_once(
+    user: User, book: Product, auth_headers: dict[str, str]
+) -> None:
+    Inventory.objects.filter(product=book).update(quantity=1)  # 最後の1個
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    put_in_cart(user, book, 1)
+    put_in_cart(bob, book, 1)
+    res = client.post("/auth/login", json={"username": "bob", "password": "pass1234"})
+    bob_headers = {"Authorization": f"Bearer {res.json()['access']}"}
+
+    assert client.post("/orders", headers=auth_headers).status_code == 201
+    assert client.post("/orders", headers=bob_headers).status_code == 409  # 2人目は買えない
+    assert Inventory.objects.get(product=book).quantity == 0  # マイナスにならない
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`47 passed`。ruff・mypy も通過）
+
+> ⏭️ **後で回収**: このテストは2人を**順番に**通すので、直す前のコードでも通る。本当に同時に走らせるテストは、第3部-8（トランザクションのテスト）で書く。
+
+### 4-2. 🔬 仕組み解剖
+
+| | `F()` 式 | `QuerySet.update()` |
+| --- | --- | --- |
+| 正式名称 | django.db.models.F（F expression） | QuerySet.update() |
+| いつ・誰が | Django は値を計算しない。SQL の中に `quantity - 1` と書くだけ。計算は、SQL を実行する瞬間に MySQL がする | 呼んだときに Django が `UPDATE ... WHERE ...` を1本送る。戻り値は、書き換えた行の数 |
+| 発行される SQL | `SET quantity = (quantity - 1)` | `UPDATE shop_inventory SET ... WHERE product_id = 1 AND quantity >= 1` |
+| TS での対応物 | 対応物なし（ORM の機能）。Prisma の `{ decrement: 1 }` が同じ役目 | 対応物なし（ORM の機能）。Prisma の `updateMany` が同じ役目 |
+| なぜこの設計 | Python で計算すると、「読んだ時点の値」で書いてしまう。MySQL に計算させれば、書く瞬間の値が使われる | 行を読まずに済む。条件（`quantity >= 1`）と書き換えを1本にまとめられる |
+| 失敗すると | 条件を付けずに `F("quantity") - 1` だけにすると、在庫0のとき3-1の `CHECK` に当たる。`IntegrityError (3819)` で 500（確認済み） | 行ごとの `save()` を通らない。`auto_now` の項目も更新されない。条件に合う行が無ければ `0` が返るだけで、例外にはならない |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+**直す前**（①）
+
+```text
+  A (alice)                       B (bob)                         stock
+  ------------------------------  ------------------------------  -----
+  SELECT ... reads 1                                              1
+                                  SELECT ... reads 1              1
+  1 >= 1 ok                       1 >= 1 ok                       1
+  UPDATE SET quantity = 0                                         0
+  COMMIT -> 201                                                   0
+                                  UPDATE SET quantity = 0         0
+                                  COMMIT -> 201                   0
+```
+
+**直したあと**（②）
+
+```text
+  A (alice)                       B (bob)                         stock
+  ------------------------------  ------------------------------  -----
+  UPDATE ... WHERE quantity >= 1  UPDATE ... WHERE quantity >= 1  1
+    -> 1 row changed                -> waits until A finishes     0
+  COMMIT -> 201                                                   0
+                                    -> sees 0: 0 rows changed     0
+                                  ROLLBACK -> 409                 0
+```
+
+✅ 検証済み: ①②の SQL ログ
+
+見てほしいのは、直す前は2人とも**自分が読んだ `1`** で判断している点です。直したあとは、判断（`>= 1`）が UPDATE の中に入ったので、bob は alice が書いた後の `0` で判断します。
+
+> ⏭️ **後で回収**: bob の UPDATE が「alice が終わるまで待つ」のは、MySQL が書き換え中の行に鍵をかけるから（行ロック）。第3部-5 で、この鍵を自分からかける `select_for_update()` と一緒に扱う。
+
+### 4-3. 🐍 Python注
+
+新しい文法はありません。
+
+### 4-4. 解説 — なぜこう設計するか
+
+3-3 の `transaction.atomic` は「途中で失敗したら取り消す」仕組みです。「他の人が同じ行を同時に読む」ことは止めません。2人とも失敗していないので、2人とも確定しました。
+
+🧠 Django の考え方: 「読んで、計算して、書く」を Python でやらない。計算と条件を SQL 1本に入れて、DB にやらせる。
+
+これで、3-2 と 3-3 の ⏭️ を回収しました。
+
+### 4-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 公式ドキュメントは、`F()` の利点として「2つのスレッドが同じ値を書き換えるときの競合（race condition）を避けられる」ことを挙げている。在庫・残高・いいね数など、数を足し引きする項目は `F()` で書く。
+> 根拠: https://docs.djangoproject.com/en/5.2/ref/models/expressions/#avoiding-race-conditions-using-f
+
+### 4-6. 🔮 予測 → 動作確認
+
+1. shell で、同じカートの行を `a`・`b` の2つの変数に読み込む（数は1）。`a.quantity += 1; a.save()`、続けて `b.quantity += 1; b.save()` すると、台帳の数は？
+2. 在庫の行（Inventory）が無い商品を注文すると？ 3-1 では、在庫の行が無いと一覧が 500 だった
+3. ②の `quantity__gte=ci.quantity` の条件を消して、在庫0の商品を注文すると？
+
+<details><summary>答え</summary>
+
+1. `3` ではなく `2`。b は「自分が読んだ1」に1を足して、`quantity = 2` を書く。a の足し算が消える（検証済み）
+2. 409（在庫が足りません）。在庫の行が無いので、`update()` が書き換えた行は `0`。直す前は、`ci.product.inventory` で例外になり 500 だった（検証済み）
+3. 500。MySQL が `-1` にしようとして、3-1 の `CHECK`（0以上）に当たる。`IntegrityError (3819)`（検証済み）
+
+</details>
+
+### 4-7. ✅ 想起チェック
+
+1. `F("quantity") - 1` の引き算は、Python と MySQL のどちらがする？
+2. `update()` の戻り値は何？ この回では、それを何に使った？
+
+<details><summary>答え</summary>
+
+1. MySQL。SQL を実行する瞬間の値で引く
+2. 書き換えた行の数。`0` なら「在庫が足りなかった」とみなして 409 にした
+
+</details>
+
+### 4-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **数を足し引きするときは `F()` で MySQL に計算させる。条件も同じ `UPDATE` に入れる。**
+
+📒 用語集に追記: `F()` 式 / `QuerySet.update()` / 競合（レースコンディション）
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ5` — 行ロックで守る

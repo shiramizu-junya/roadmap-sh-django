@@ -101,3 +101,6 @@
 | `transaction.atomic` | django.db.transaction.atomic | `with` で囲んだ範囲を1つのトランザクションにする。ふつうに抜ければ確定、例外で抜ければ取り消し | 第3部-3 |
 | コミット / ロールバック | commit / rollback | コミットは書き込みの確定。ロールバックは取り消しで、`BEGIN` の前の台帳に戻る（ただし `AUTO_INCREMENT` の番号は戻らない） | 第3部-3 |
 | `bulk_create()` | QuerySet.bulk_create() | 何行もの INSERT を SQL 1本にまとめる。行ごとの `save()` は通らず、MySQL では作った行に `id` が入らない | 第3部-3 |
+| `F()` 式 | F expression（django.db.models.F） | 「台帳に今書いてある値」を指す印。`F("quantity") - 1` は Python で計算せず、`quantity = quantity - 1` の SQL になり、MySQL がその瞬間の値で計算する | 第3部-4 |
+| `update()` | QuerySet.update() | `filter()` で絞った行を、読み込まずに `UPDATE` 1本で書き換える。戻り値は書き換えた行の数。`save()` は通らない | 第3部-4 |
+| 競合（レースコンディション） | race condition | 2つの処理が同じ値を同時に「読んで、計算して、書く」と、片方の結果が消えたり、在庫より多く売れたりすること | 第3部-4 |
