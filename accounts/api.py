@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate
+from django.db import transaction
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404  # 追加
 from ninja import Field, Router, Schema, Status  # Field を追加
@@ -78,9 +79,11 @@ class ProfileIn(Schema):
 def register(request: HttpRequest, payload: RegisterIn):
     if User.objects.filter(username=payload.username).exists():
         return Status(409, {"detail": "そのユーザー名は使われています"})
-    # create_user: パスワードをハッシュにしてから保存する
-    user = User.objects.create_user(username=payload.username, password=payload.password)
-    Profile.objects.create(user=user)  # 空のプロフィールを一緒に作る
+    # User と Profile は両方できるか、両方できないか（片方だけ残さない）
+    with transaction.atomic():
+        # create_user: パスワードをハッシュにしてから保存する
+        user = User.objects.create_user(username=payload.username, password=payload.password)
+        Profile.objects.create(user=user)  # 空のプロフィールを一緒に作る
     return Status(201, user)
 
 

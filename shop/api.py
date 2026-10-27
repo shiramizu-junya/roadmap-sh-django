@@ -1,11 +1,14 @@
+from datetime import datetime
 from decimal import Decimal
 
+from django.db import transaction
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
+from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 
-from .models import Cart, CartItem, Product
+from .models import Cart, CartItem, Order, OrderItem, Product
 
 # 商品の API 一式。URL の頭（/products）は config/api.py で決める
 router = Router()
@@ -75,3 +78,53 @@ def get_cart(request: HttpRequest):
     items = cart.items.select_related("product").order_by("id")
     total = sum((item.product.price * item.quantity for item in items), Decimal("0"))
     return {"items": items, "total": total}
+
+
+# 注文の API 一式。URL の頭（/orders）は config/api.py で決める
+order_router = Router()
+
+
+class OrderItemOut(Schema):
+    product_id: int
+    price: Decimal  # 買った時点の価格
+    quantity: int
+
+
+class OrderOut(Schema):
+    id: int
+    total: Decimal
+    created_at: datetime
+    items: list[OrderItemOut]
+
+
+@order_router.post("", response={201: OrderOut}, auth=JWTAuth())
+def place_order(request: HttpRequest):
+    assert request.user.is_authenticated
+    cart = get_object_or_404(Cart, user=request.user)
+    cart_items = list(cart.items.select_related("product__inventory"))
+    if not cart_items:
+        raise HttpError(400, "カートが空です")
+
+    # ここから下は「全部やるか、何もしないか」。途中で例外が出たら、全部取り消す
+    with transaction.atomic():
+        total = sum((ci.product.price * ci.quantity for ci in cart_items), Decimal("0"))
+        order = Order.objects.create(user=request.user, total=total)
+        # 注文の明細を、INSERT 1本でまとめて作る
+        OrderItem.objects.bulk_create(
+            [
+                OrderItem(
+                    order=order, product=ci.product, price=ci.product.price, quantity=ci.quantity
+                )
+                for ci in cart_items
+            ]
+        )
+        for ci in cart_items:
+            inventory = ci.product.inventory
+            if inventory.quantity < ci.quantity:
+                # 例外で with を抜けると、上で作った注文と明細も無かったことになる
+                raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")
+            inventory.quantity -= ci.quantity
+            inventory.save()
+        cart.items.all().delete()  # カートを空にする
+
+    return Status(201, order)
