@@ -1386,3 +1386,281 @@ def test_last_one_is_sold_only_once(
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ5` — 行ロックで守る
+
+
+---
+
+## 第3部-5: 行ロックで守る
+
+**❓ この回の問い**: 3-4 で、在庫の「比べて引く」を UPDATE 1本に入れて、最後の1個が2人に売れなくなった。では、**同じ人が注文ボタンを2回押したら**？ カートの中身は1回ぶんしか無い
+
+**作るもの**: 同じカートが2回注文されるのを起こし、`select_for_update()` でカートの行に鍵をかけて直す
+**重要度**: 🟡 読めればよい — 書く場面は限られる。ただ、お金や在庫を扱うコードでは必ず出会う
+**前ステップとの接続**: 3-4 の `place_order` の「カートを読む」部分を、`atomic` の中に入れて鍵をかける
+
+### 5-0. このステップの初出
+
+**Django / Ninja**: `select_for_update()`, 分離レベル / **Python**: なし
+
+> 🧒 **かみくだくと**: **行ロック**（row lock）は、台帳の1行に「今わたしが使っています」の札を掛けること。札の掛かった行を、他の人は書き換えられないし、札を掛けることもできない。持ち主のトランザクションが終わる（コミットかロールバック）まで待たされる。
+
+> 🧒 **かみくだくと**: **select_for_update()** は、読むと同時にその行へ札を掛ける命令。SQL の最後に `FOR UPDATE` が付く。
+
+> 🧒 **かみくだくと**: **分離レベル**（isolation level）は、「他の人が確定した書き込みが、自分のトランザクションの中で、いつ見えるか」の決まり。
+
+### 5-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 壊れるのを見る**
+
+3-4 の①と同じく、`shop/api.py` に**一時的に** `import time` と `time.sleep(1)` を足します（`raise HttpError(400, "カートが空です")` の下）。
+
+管理画面で商品 1 の在庫を `5` にし、alice のカートに商品 1 を1個入れます（`ACCESS` は 3-4 と同じ取り方）。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/cart/items -H "Authorization: Bearer $ACCESS" \
+  -H "Content-Type: application/json" -d '{"product_id": 1}'
+```
+
+同じ身分証で、2回同時に注文します（ボタンの2度押し）。
+
+```bash
+curl -s -w " %{http_code}\n" -X POST http://127.0.0.1:8000/api/orders -H "Authorization: Bearer $ACCESS" &
+curl -s -w " %{http_code}\n" -X POST http://127.0.0.1:8000/api/orders -H "Authorization: Bearer $ACCESS" &
+wait
+```
+
+```text
+{"id": ..., "total": "2980.00", "created_at": ..., "items": [{"product_id": 1, "price": "2980.00", "quantity": 1}]} 201
+{"id": ..., "total": "2980.00", "created_at": ..., "items": [{"product_id": 1, "price": "2980.00", "quantity": 1}]} 201
+```
+
+✅ 検証済み: 注文が**2件**でき、在庫は `5` → `3`。カートには1個しか無かったのに、2回ぶん売れた
+
+在庫は十分あるので、3-4 の `WHERE quantity >= 1` は2回とも通ります。壊れたのは在庫ではなく、**カートを2回読んだこと**です。`F()` では直せません。
+
+**② カートに鍵をかける**（`shop/api.py`）
+
+`place_order` を、関数**まるごと**置き換える（カートを読む行が `with` の中に入るので、字下げが変わる）
+
+```python
+@order_router.post("", response={201: OrderOut}, auth=JWTAuth())
+def place_order(request: HttpRequest):
+    assert request.user.is_authenticated
+    # ここから下は「全部やるか、何もしないか」。途中で例外が出たら、全部取り消す
+    with transaction.atomic():
+        # カートの行に鍵をかけて読む。同じカートの2つ目の注文は、1つ目が終わるまでここで待つ
+        cart = get_object_or_404(Cart.objects.select_for_update(), user=request.user)
+        cart_items = list(cart.items.select_related("product"))
+        if not cart_items:
+            raise HttpError(400, "カートが空です")
+
+        total = sum((ci.product.price * ci.quantity for ci in cart_items), Decimal("0"))
+        order = Order.objects.create(user=request.user, total=total)
+        # 注文の明細を、INSERT 1本でまとめて作る
+        OrderItem.objects.bulk_create(
+            [
+                OrderItem(
+                    order=order, product=ci.product, price=ci.product.price, quantity=ci.quantity
+                )
+                for ci in cart_items
+            ]
+        )
+        for ci in cart_items:
+            # 在庫が足りているときだけ減らす。比べるのも引くのも、MySQL が UPDATE 1本の中でやる
+            updated = Inventory.objects.filter(
+                product=ci.product, quantity__gte=ci.quantity
+            ).update(quantity=F("quantity") - ci.quantity)
+            if updated == 0:
+                # 例外で with を抜けると、上で作った注文と明細も無かったことになる
+                raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")
+
+        cart.items.all().delete()  # カートを空にする
+
+    return Status(201, order)
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+> 💡補足: `get_object_or_404` には、モデルの代わりに `Cart.objects.select_for_update()` のような QuerySet も渡せる。探し方の指定ごと渡せる。
+
+もう一度確かめるため、`time.sleep(1)` を `raise HttpError(400, "カートが空です")` の下に入れ直します（今度は `with` の中なので、字下げは8つ）。在庫を `5` に戻し、カートに1個入れて、①の2度押しをもう一度。
+
+```text
+{"id": ..., "total": "2980.00", "created_at": ..., "items": [{"product_id": 1, "price": "2980.00", "quantity": 1}]} 201
+{"detail": "カートが空です"} 400
+```
+
+```sql
+BEGIN;  -- 1回目
+SELECT ... FROM `shop_cart` WHERE `shop_cart`.`user_id` = 1 LIMIT 21 FOR UPDATE;  -- 0.000秒
+BEGIN;  -- 2回目
+...（1回目: 注文・明細・在庫・カートを空に）
+COMMIT;  -- 1回目。ここで札が外れる
+SELECT ... FROM `shop_cart` WHERE `shop_cart`.`user_id` = 1 LIMIT 21 FOR UPDATE;  -- 2回目: 1.021秒（待っていた）
+SELECT ... FROM `shop_cartitem` ...;  -- 2回目: もう空
+ROLLBACK;  -- 2回目
+```
+
+✅ 検証済み: MySQL 8.4.11（開発サーバの SQL ログ。行頭の `(1.021)` が待った時間）
+
+確かめたら、`import time` と `time.sleep(1)` を**消します**。
+
+**③ 分離レベルを見る**
+
+```bash
+uv run python manage.py shell -c "
+from django.db import connection
+with connection.cursor() as c:
+    c.execute('SELECT @@transaction_isolation, @@global.transaction_isolation')
+    print(c.fetchone())
+"
+```
+
+```text
+('READ-COMMITTED', 'REPEATABLE-READ')
+```
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+MySQL の既定は `REPEATABLE-READ`（右）ですが、Django は接続するたびに `READ-COMMITTED`（左）に変えています。SQL ログの先頭に出る `SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED` がそれです。
+
+**④ テスト**（`tests/test_orders.py` の最後に追加）
+
+要件だけ書きます。
+
+1. カートに1個入れて注文すると 201
+2. もう一度注文すると 400。注文は1件のまま、在庫は1個だけ減っている
+
+<details><summary>解答例</summary>
+
+```python
+def test_second_click_finds_empty_cart(
+    user: User, book: Product, auth_headers: dict[str, str]
+) -> None:
+    put_in_cart(user, book, 1)
+
+    assert client.post("/orders", headers=auth_headers).status_code == 201
+    res = client.post("/orders", headers=auth_headers)  # もう一度押した
+
+    assert res.status_code == 400  # カートはもう空
+    assert Order.objects.count() == 1
+    assert Inventory.objects.get(product=book).quantity == 4  # 1個だけ減る
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`48 passed`。ruff・mypy も通過）
+
+3-4 と同じく、このテストは順番に押すので、鍵が無くても通ります。同時に押すテストは、3-4 で予告したとおり第3部-8 で書きます。
+
+### 5-2. 🔬 仕組み解剖
+
+| | `select_for_update()` | 分離レベル |
+| --- | --- | --- |
+| 正式名称 | QuerySet.select_for_update() | transaction isolation level（Django の設定は `OPTIONS` の `isolation_level`） |
+| いつ・誰が | 評価したときに Django が `SELECT ... FOR UPDATE` を送る。MySQL が行に札を掛け、`COMMIT` / `ROLLBACK` で外す | Django が接続するたびに `SET SESSION TRANSACTION ISOLATION LEVEL ...` を送る。以降の SELECT が何を見るかを MySQL が決める |
+| 発行される SQL | `SELECT ... WHERE user_id = 1 LIMIT 21 FOR UPDATE` | `SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED` |
+| TS での対応物 | 対応物なし（DB の機能）。Prisma には専用の書き方が無く、生 SQL で `FOR UPDATE` を書く | 対応物なし（DB の機能）。Prisma の `$transaction` の `isolationLevel` が同じ設定 |
+| なぜこの設計 | 「読んで、Python で判断して、書く」の間、他の人に同じ行を触らせない。`F()` で SQL 1本にできない処理を守る | 同時の読み書きをどこまで隔てるかは、速さとのかね合い。Django は MySQL では `READ COMMITTED` を既定にしている |
+| 失敗すると | `atomic` の外で使うと `TransactionManagementError: select_for_update cannot be used outside of a transaction.`（確認済み）。札は1つ目の SQL ですぐ外れてしまうので、Django が止める | `REPEATABLE READ` にすると、下の表のように「古い値」を読み続けることがある |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+**直す前**（①）と**直したあと**（②）
+
+```text
+  click 1                           click 2
+  --------------------------------  --------------------------------
+  read cart: 1 item                 read cart: 1 item
+  BEGIN, order 1, stock -1          BEGIN, order 2, stock -1
+  COMMIT -> 201                     COMMIT -> 201
+```
+
+```text
+  click 1                           click 2
+  --------------------------------  --------------------------------
+  BEGIN                             BEGIN
+  lock cart (FOR UPDATE)            lock cart -> waits ...
+  read cart: 1 item                      :
+  order 1, stock -1, empty cart          :
+  COMMIT -> 201 (lock released)          :
+                                    lock cart -> got it
+                                    read cart: 0 items
+                                    ROLLBACK -> 400
+```
+
+✅ 検証済み: ①②の SQL ログ
+
+見てほしいのは、2回目が「カートを読む」**前**で止まっている点です。札が外れてから読むので、1回目が空にしたあとのカートを見ます。
+
+**分離レベルで、読める値が変わる**
+
+トランザクションの中で在庫を読み（`5`）、そのあと別の人が `2` に書き換えて確定しました。同じトランザクションの中で、もう一度読むと次のようになります。
+
+| 分離レベル | 1回目の SELECT | 2回目の SELECT | `SELECT ... FOR UPDATE` |
+| --- | --- | --- | --- |
+| `READ COMMITTED`（Django の既定） | 5 | **2**（確定した最新） | 2 |
+| `REPEATABLE READ`（MySQL の既定） | 5 | **5**（1回目と同じ） | 2 |
+
+✅ 検証済み: MySQL 8.4.11（2本の接続で確認）
+
+`FOR UPDATE` は、分離レベルに関係なく最新の値を読みます。3-4 の UPDATE も同じで、書き換える行は必ず最新の値で判断します。
+
+> ⏭️ **3-4 の回収**: 3-4 で bob の UPDATE が「alice が終わるまで待った」のは、alice の UPDATE がその行に札を掛けていたから。UPDATE は、書き換える行に自動で札を掛ける。
+
+### 5-3. 🐍 Python注
+
+新しい文法はありません。
+
+### 5-4. 解説 — なぜこう設計するか
+
+鍵を掛けたのは、在庫ではなく**カート**の行です。守りたいのは「同じカートを2回注文しない」ことだからです。別の人のカートは別の行なので、alice と bob が同時に注文しても、お互いを待ちません（2人同時で、どちらも約1秒で 201 を確認済み）。
+
+🧠 Django の考え方: SQL 1本で済むなら `F()`。Python で判断が要るなら、`atomic` の中で `select_for_update()` してから読む。
+
+### 5-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 札を掛けている間、他の人は待たされる。MySQL の公式ドキュメントは、トランザクションを小さく短く保つよう勧めている。`atomic` の中で、外部 API の呼び出しやメール送信のような遅い処理をしない。
+> 根拠: https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks-handling.html
+
+### 5-6. 🔮 予測 → 動作確認
+
+1. `with transaction.atomic():` の外で `Cart.objects.select_for_update().get(...)` を呼ぶと？
+2. ②のあと、alice と bob が同時に注文したら、bob は alice の終わりを待つ？
+3. `config/settings.py` の `OPTIONS` に `"isolation_level": "repeatable read"` を足したら、SQL ログの先頭の `SET SESSION ...` はどう変わる？
+
+<details><summary>答え</summary>
+
+1. `TransactionManagementError: select_for_update cannot be used outside of a transaction.`（検証済み）。鍵がすぐ外れて意味が無いので、Django が止める
+2. 待たない。札はカートの行ごとで、alice と bob のカートは別の行（検証済み）
+3. `SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ` に変わる。ただし公式ドキュメントは、MySQL では `repeatable read` だとデータが失われることがあると注意している。試したら元に戻す
+   根拠: https://docs.djangoproject.com/en/5.2/ref/databases/#mysql-isolation-level
+
+</details>
+
+### 5-7. ✅ 想起チェック
+
+1. `select_for_update()` で掛けた札は、いつ外れる？
+2. 「在庫を引く」は `F()` で守った。「同じカートを2回注文しない」は、なぜ `F()` では守れない？
+
+<details><summary>答え</summary>
+
+1. その `atomic` が終わるとき（`COMMIT` か `ROLLBACK`）
+2. 壊れたのは「カートを読んで、注文を作る」の部分で、SQL 1本の足し引きにできないから。読む前に札を掛けて、他の注文を待たせる
+
+</details>
+
+### 5-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **読んでから Python で判断するなら、`atomic` の中で `select_for_update()` して、その行に札を掛けてから読む。**
+
+📒 用語集に追記: 行ロック / `select_for_update()` / 分離レベル（`READ COMMITTED` / `REPEATABLE READ`）
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ6` — 注文ステータス

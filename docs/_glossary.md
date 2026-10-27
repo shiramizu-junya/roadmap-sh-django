@@ -104,3 +104,6 @@
 | `F()` 式 | F expression（django.db.models.F） | 「台帳に今書いてある値」を指す印。`F("quantity") - 1` は Python で計算せず、`quantity = quantity - 1` の SQL になり、MySQL がその瞬間の値で計算する | 第3部-4 |
 | `update()` | QuerySet.update() | `filter()` で絞った行を、読み込まずに `UPDATE` 1本で書き換える。戻り値は書き換えた行の数。`save()` は通らない | 第3部-4 |
 | 競合（レースコンディション） | race condition | 2つの処理が同じ値を同時に「読んで、計算して、書く」と、片方の結果が消えたり、在庫より多く売れたりすること | 第3部-4 |
+| 行ロック | row lock | 台帳の1行に「使用中」の札を掛けること。他の人は、その行を書き換えたり札を掛けたりできず、持ち主のトランザクションが終わるまで待つ | 第3部-5 |
+| `select_for_update()` | QuerySet.select_for_update() | 読むと同時に、その行へ札を掛ける（SQL の `FOR UPDATE`）。`atomic` の中でしか使えない | 第3部-5 |
+| 分離レベル | transaction isolation level | 他の人が確定した書き込みが、自分のトランザクションの中でいつ見えるかの決まり。Django は MySQL で `READ COMMITTED`（毎回最新を読む）を使う。MySQL の既定は `REPEATABLE READ`（最初に読んだ値が見え続ける） | 第3部-5 |
