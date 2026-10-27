@@ -53,3 +53,18 @@ def test_out_of_stock_rolls_back(user: User, book: Product, auth_headers: dict[s
     assert res.status_code == 409
     assert Order.objects.count() == 0  # 先に作った注文も取り消された
     assert CartItem.objects.count() == 1  # カートはそのまま
+
+
+def test_last_one_is_sold_only_once(
+    user: User, book: Product, auth_headers: dict[str, str]
+) -> None:
+    Inventory.objects.filter(product=book).update(quantity=1)  # 最後の1個
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    put_in_cart(user, book, 1)
+    put_in_cart(bob, book, 1)
+    res = client.post("/auth/login", json={"username": "bob", "password": "pass1234"})
+    bob_headers = {"Authorization": f"Bearer {res.json()['access']}"}
+
+    assert client.post("/orders", headers=auth_headers).status_code == 201
+    assert client.post("/orders", headers=bob_headers).status_code == 409  # 2人目は買えない
+    assert Inventory.objects.get(product=book).quantity == 0  # マイナスにならない

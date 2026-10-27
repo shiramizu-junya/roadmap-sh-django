@@ -2,13 +2,14 @@ from datetime import datetime
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import F
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 
-from .models import Cart, CartItem, Order, OrderItem, Product
+from .models import Cart, CartItem, Inventory, Order, OrderItem, Product
 
 # 商品の API 一式。URL の頭（/products）は config/api.py で決める
 router = Router()
@@ -65,9 +66,10 @@ def add_to_cart(request: HttpRequest, payload: CartItemIn):
         cart=cart, product=product, defaults={"quantity": payload.quantity}
     )
     if not created:
-        # もう入っていたら、行は増やさずに数を足す
-        item.quantity += payload.quantity
-        item.save()
+        # もう入っていたら、行は増やさずに数を足す。足し算は MySQL にさせる
+        CartItem.objects.filter(id=item.id).update(quantity=F("quantity") + payload.quantity)
+        item = CartItem.objects.get(id=item.id)  # 足したあとの数を読み直す
+
     return Status(201, item)
 
 
@@ -101,7 +103,7 @@ class OrderOut(Schema):
 def place_order(request: HttpRequest):
     assert request.user.is_authenticated
     cart = get_object_or_404(Cart, user=request.user)
-    cart_items = list(cart.items.select_related("product__inventory"))
+    cart_items = list(cart.items.select_related("product"))
     if not cart_items:
         raise HttpError(400, "カートが空です")
 
@@ -119,12 +121,14 @@ def place_order(request: HttpRequest):
             ]
         )
         for ci in cart_items:
-            inventory = ci.product.inventory
-            if inventory.quantity < ci.quantity:
+            # 在庫が足りているときだけ減らす。比べるのも引くのも、MySQL が UPDATE 1本の中でやる
+            updated = Inventory.objects.filter(
+                product=ci.product, quantity__gte=ci.quantity
+            ).update(quantity=F("quantity") - ci.quantity)
+            if updated == 0:
                 # 例外で with を抜けると、上で作った注文と明細も無かったことになる
                 raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")
-            inventory.quantity -= ci.quantity
-            inventory.save()
+
         cart.items.all().delete()  # カートを空にする
 
     return Status(201, order)
