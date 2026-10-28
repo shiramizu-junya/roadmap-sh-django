@@ -102,13 +102,14 @@ class OrderOut(Schema):
 @order_router.post("", response={201: OrderOut}, auth=JWTAuth())
 def place_order(request: HttpRequest):
     assert request.user.is_authenticated
-    cart = get_object_or_404(Cart, user=request.user)
-    cart_items = list(cart.items.select_related("product"))
-    if not cart_items:
-        raise HttpError(400, "カートが空です")
-
     # ここから下は「全部やるか、何もしないか」。途中で例外が出たら、全部取り消す
     with transaction.atomic():
+        # カートの行に鍵をかけて読む。同じカートの2つ目の注文は、1つ目が終わるまでここで待つ
+        cart = get_object_or_404(Cart.objects.select_for_update(), user=request.user)
+        cart_items = list(cart.items.select_related("product"))
+        if not cart_items:
+            raise HttpError(400, "カートが空です")
+
         total = sum((ci.product.price * ci.quantity for ci in cart_items), Decimal("0"))
         order = Order.objects.create(user=request.user, total=total)
         # 注文の明細を、INSERT 1本でまとめて作る

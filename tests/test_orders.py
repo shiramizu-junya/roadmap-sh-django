@@ -68,3 +68,16 @@ def test_last_one_is_sold_only_once(
     assert client.post("/orders", headers=auth_headers).status_code == 201
     assert client.post("/orders", headers=bob_headers).status_code == 409  # 2人目は買えない
     assert Inventory.objects.get(product=book).quantity == 0  # マイナスにならない
+
+
+def test_second_click_finds_empty_cart(
+    user: User, book: Product, auth_headers: dict[str, str]
+) -> None:
+    put_in_cart(user, book, 1)
+
+    assert client.post("/orders", headers=auth_headers).status_code == 201
+    res = client.post("/orders", headers=auth_headers)  # もう一度押した
+
+    assert res.status_code == 400  # カートはもう空
+    assert Order.objects.count() == 1
+    assert Inventory.objects.get(product=book).quantity == 4  # 1個だけ減る
