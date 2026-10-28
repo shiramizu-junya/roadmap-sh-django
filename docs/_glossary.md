@@ -107,3 +107,7 @@
 | 行ロック | row lock | 台帳の1行に「使用中」の札を掛けること。他の人は、その行を書き換えたり札を掛けたりできず、持ち主のトランザクションが終わるまで待つ | 第3部-5 |
 | `select_for_update()` | QuerySet.select_for_update() | 読むと同時に、その行へ札を掛ける（SQL の `FOR UPDATE`）。`atomic` の中でしか使えない | 第3部-5 |
 | 分離レベル | transaction isolation level | 他の人が確定した書き込みが、自分のトランザクションの中でいつ見えるかの決まり。Django は MySQL で `READ COMMITTED`（毎回最新を読む）を使う。MySQL の既定は `REPEATABLE READ`（最初に読んだ値が見え続ける） | 第3部-5 |
+| `TextChoices` | django.db.models.TextChoices（列挙型） | 項目に入れてよい文字列の一覧表。台帳に入る値（`"shipped"`）と人が読む名前（`発送済み`）を組にする | 第3部-6 |
+| `choices` | Field.choices | 項目に `TextChoices` の一覧を結びつける指定。確かめるのはスキーマ・`full_clean()`・管理画面で、DB には決まりを作らない | 第3部-6 |
+| モデルメソッド | model methods | モデルのクラスに書く関数。お店の決まり（業務ルール）をここに置くと、どこから呼んでも同じルールが守られる | 第3部-6 |
+| `is_staff` | User.is_staff | ユーザーが「お店の人（スタッフ）」かどうかの印。管理画面に入れるかどうかも、これで決まる | 第3部-6 |

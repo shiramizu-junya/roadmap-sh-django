@@ -1664,3 +1664,285 @@ def test_second_click_finds_empty_cart(
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ6` — 注文ステータス
+
+
+---
+
+## 第3部-6: 注文ステータス
+
+**❓ この回の問い**: 3-5 までで、注文は壊れずに確定できるようになった。確定した注文は、このあと発送され、届いて完了する。では、その「状態」をどこに持ち、「確定からいきなり完了」のような飛ばしを、どこで断る？
+
+**作るもの**: 注文に状態（確定 → 発送済み → 完了）を持たせ、`PATCH /api/orders/{id}/status` でお店の人が1段ずつ進める
+**重要度**: 🔴 毎日使う — 「決まった値の中から1つ」の項目と、そのルールを持つメソッドは、どのアプリにも出てくる
+**前ステップとの接続**: 3-3 の Order に `status` を足す。2-14 の `soft_delete()` と同じく、ルールをモデルのメソッドに書く
+
+### 6-0. このステップの初出
+
+**Django / Ninja**: `TextChoices`, モデルメソッド（業務ルールを置く場所として） / **Python**: クラスの中のクラス
+
+> 🧒 **かみくだくと**: **TextChoices** は、「この項目に入れてよい文字列の一覧表」。台帳に入る値（`"shipped"`）と、人が読む名前（`発送済み`）を組にして並べる。
+
+> 🧒 **かみくだくと**: **モデルメソッド**は、モデルのクラスに書く関数。2-14 の `soft_delete()` がそう。この回は「状態はこの順にしか進めない」という**お店の決まり**（業務ルール）を、API ではなくモデルに書く。
+
+> 🧒 **かみくだくと**: **is_staff** は、ユーザーの「お店の人か」の印（`True` / `False`）。1-4 の `createsuperuser` で作った `admin` は `True`。管理画面に入れるかどうかも、この印で決まる。
+
+### 6-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① モデル**（`shop/models.py` の `class Order` を、まるごと置き換え）
+
+```python
+class Order(models.Model):
+    class Status(models.TextChoices):
+        # 名前 = "台帳に入る値", "人が読む名前"
+        PLACED = "placed", "確定"
+        SHIPPED = "shipped", "発送済み"
+        COMPLETED = "completed", "完了"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    total = models.DecimalField(max_digits=12, decimal_places=2)  # 合計金額（確定した時点）
+    # 注文の状態。選べる値は Status の3つ。作ったときは「確定」
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PLACED)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"注文 {self.id}"
+
+    def change_status(self, new_status: str) -> None:
+        # 進んでよいのは「確定 → 発送済み → 完了」の順だけ（今の状態: 次に進める状態）
+        next_status: dict[str, str] = {
+            Order.Status.PLACED: Order.Status.SHIPPED,
+            Order.Status.SHIPPED: Order.Status.COMPLETED,
+        }
+        if next_status.get(self.status) != new_status:
+            new_label = Order.Status(new_status).label
+            raise ValueError(f"「{self.get_status_display()}」から「{new_label}」には進めません")
+        self.status = new_status
+        self.save(update_fields=["status"])
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+```bash
+uv run python manage.py makemigrations shop
+uv run python manage.py sqlmigrate shop 0004
+uv run python manage.py migrate
+```
+
+```sql
+ALTER TABLE `shop_order` ADD COLUMN `status` varchar(20) DEFAULT 'placed' NOT NULL;
+ALTER TABLE `shop_order` ALTER COLUMN `status` DROP DEFAULT;
+```
+
+✅ 検証済み: `shop/migrations/0004_order_status.py` ができる。今ある注文は、全部 `placed` で埋まる
+
+**② API**（`shop/api.py`）
+
+`OrderOut` に1行足す（`total` の下）
+
+```python
+    status: Order.Status  # "placed" / "shipped" / "completed" のどれか
+```
+
+ファイルの**最後**に追加
+
+```python
+class OrderStatusIn(Schema):
+    status: Order.Status  # 3つ以外の値は 422
+
+
+@order_router.patch("/{order_id}/status", response=OrderOut, auth=JWTAuth())
+def change_order_status(request: HttpRequest, order_id: int, payload: OrderStatusIn):
+    # 状態を進めるのはお店の人だけ（管理画面に入れるスタッフ）
+    if not request.user.is_staff:
+        raise HttpError(403, "お店の人しか変えられません")
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        order.change_status(payload.status)  # 進んでよいかは、モデルが決める
+    except ValueError as e:
+        raise HttpError(409, str(e)) from e
+    return order
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+> 💡補足: `shop/api.py` には、Ninja の `Status`（`Status(201, ...)` の）も import してある。注文の状態は `Order.Status` と、クラスの中に置いたので、名前がぶつからない。
+
+**③ 試す**（`STAFF` は `admin` の身分証。取り方は 3-4 の `ACCESS` と同じで、パスワードは 1-4 で決めたもの。`<id>` は自分の注文の id）
+
+```bash
+curl -s -w " %{http_code}\n" -X PATCH http://127.0.0.1:8000/api/orders/<id>/status \
+  -H "Authorization: Bearer $STAFF" -H "Content-Type: application/json" -d '{"status": "completed"}'
+curl -s -w " %{http_code}\n" -X PATCH http://127.0.0.1:8000/api/orders/<id>/status \
+  -H "Authorization: Bearer $STAFF" -H "Content-Type: application/json" -d '{"status": "shipped"}'
+```
+
+```text
+{"detail": "「確定」から「完了」には進めません"} 409
+{"id": ..., "total": "2980.00", "status": "shipped", "created_at": ..., "items": [...]} 200
+```
+
+✅ 検証済み: Django 5.2.17 / django-ninja 1.7.1
+
+`{"status": "flying"}` なら 422（`Input should be 'placed', 'shipped' or 'completed'`）、`$ACCESS`（alice）なら 403 です（検証済み）。
+
+**④ テスト**（`tests/test_order_status.py` 新規）
+
+要件だけ書きます。
+
+1. モデルだけを試す: 確定の注文で `change_status(Order.Status.COMPLETED)` すると `ValueError`。台帳は `placed` のまま
+2. お店の人が `shipped` にすると 200 で、応答の `status` は `"shipped"`
+3. 発送済みの注文を `placed` に戻そうとすると 409
+4. お客（`auth_headers`）が変えようとすると 403
+
+お店の人は、`create_user(..., is_staff=True)` で作れます。
+
+<details><summary>解答例</summary>
+
+```python
+from decimal import Decimal
+
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from config.api import api
+from shop.models import Order
+
+client = TestClient(api)
+
+
+@pytest.fixture
+def order(user: User) -> Order:
+    return Order.objects.create(user=user, total=Decimal("2980"))
+
+
+@pytest.fixture
+def staff_headers(db) -> dict[str, str]:
+    # お店の人（is_staff=True）の身分証
+    User.objects.create_user(username="shop", password="pass1234", is_staff=True)
+    res = client.post("/auth/login", json={"username": "shop", "password": "pass1234"})
+    return {"Authorization": f"Bearer {res.json()['access']}"}
+
+
+def test_cannot_skip_shipping(order: Order) -> None:
+    # API を通さず、モデルのメソッドだけを試す
+    with pytest.raises(ValueError):
+        order.change_status(Order.Status.COMPLETED)  # 確定 → 完了 は飛ばしすぎ
+    assert Order.objects.get(id=order.id).status == "placed"  # 台帳は変わっていない
+
+
+def test_staff_ships_order(order: Order, staff_headers: dict[str, str]) -> None:
+    res = client.patch(
+        f"/orders/{order.id}/status", json={"status": "shipped"}, headers=staff_headers
+    )
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "shipped"
+
+
+def test_cannot_go_back(order: Order, staff_headers: dict[str, str]) -> None:
+    order.change_status(Order.Status.SHIPPED)
+
+    res = client.patch(
+        f"/orders/{order.id}/status", json={"status": "placed"}, headers=staff_headers
+    )
+
+    assert res.status_code == 409
+
+
+def test_customer_cannot_change_status(order: Order, auth_headers: dict[str, str]) -> None:
+    res = client.patch(
+        f"/orders/{order.id}/status", json={"status": "shipped"}, headers=auth_headers
+    )
+
+    assert res.status_code == 403
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`52 passed`。ruff・mypy も通過）
+
+> 💡補足: `with pytest.raises(ValueError):` は、「この中で `ValueError` が出れば合格、出なければ不合格」という pytest の書き方。
+
+### 6-2. 🔬 仕組み解剖
+
+| | `TextChoices` | モデルメソッド（`change_status`） |
+| --- | --- | --- |
+| 正式名称 | 列挙型（enumeration types）の `TextChoices` と、フィールドの `choices` | model methods |
+| いつ・誰が | 起動時に Python がクラスを作る。`choices` は、台帳には何も足さない（①の SQL は `varchar(20)` だけ）。値を確かめるのは Ninja のスキーマ（422）と、Django のモデル検証（`full_clean()`）と管理画面 | 呼んだときに Python が実行する。`save(update_fields=["status"])` で `UPDATE ... SET status = ...` を1本送る |
+| 発行される SQL | `ADD COLUMN status varchar(20)`。`CHECK` は作られない | `UPDATE shop_order SET status = 'shipped' WHERE id = 1` |
+| TS での対応物 | TS の `enum` や `"placed" \| "shipped" \| "completed"` が近い。ただしこちらは「人が読む名前」も一緒に持つ | クラスのメソッド。対応物そのもの |
+| なぜこの設計 | 値（`"shipped"`）と名前（`発送済み`）を1か所で管理する。`get_status_display()`（Django が自動で作る）で名前が取れる | ルールをモデルに置けば、API・管理コマンド・テストのどこから呼んでも、同じ決まりが守られる |
+| 失敗すると | `Order.objects.create(status="flying")` は**保存できてしまう**（DB に決まりが無い。確認済み）。`full_clean()` なら `Value 'flying' is not a valid choice.` | メソッドを通らずに `order.status = ...; order.save()` と書けば、ルールは守られない。管理画面も通らない（🔮の3） |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+```text
+  +--------+      +---------+      +-----------+
+  | placed | ---> | shipped | ---> | completed |
+  +--------+      +---------+      +-----------+
+       |                                 ^
+       +--------- x skip -> 409 ---------+
+```
+
+✅ 検証済み: ③と④（戻る向きも 409）
+
+見てほしいのは、矢印が**右向きに1段ずつ**しか無い点です。`next_status` の辞書が、この矢印をそのまま書いたものです。
+
+### 6-3. 🐍 Python注
+
+> 🐍 **Python注**: `class Order:` の中の `class Status(...)` は、クラスの中に置いたクラス。外からは `Order.Status.SHIPPED` と呼ぶ。TS の `namespace` の中に `enum` を置くのに近い。
+
+> 🐍 **Python注**: `next_status.get(key)` は、辞書に `key` が無ければ `None` を返す（例外にならない）。`completed` には次が無いので、何を渡しても進めない。
+
+### 6-4. 解説 — なぜこう設計するか
+
+「確定から完了に飛ばない」は、HTTP とは関係の無い**お店の決まり**です。API の関数に書くと、管理コマンドやバッチから状態を変えるとき、同じ `if` をもう一度書くことになります。モデルに置けば、だれが呼んでも1か所で守られます。API の関数は、決まりの**結果**（`ValueError`）を 409 に訳すだけです。
+
+🧠 Django の考え方: 業務ルールはモデルのメソッドに置く。ビュー（API の関数）は、HTTP の出入りに専念する。
+
+### 6-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: Django の公式ドキュメントは、モデルメソッドを「業務ロジックを1か所（モデル）にまとめる、価値のあるやり方」と紹介している。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/models/#model-methods
+
+### 6-6. 🔮 予測 → 動作確認
+
+1. `migrate` のあと、3-3〜3-5 で作った注文の `status` は何になっている？
+2. shell で `Order.objects.create(user=..., total=1, status="flying")` すると？
+3. 管理画面で、確定の注文の Status を「完了」に変えて保存すると？
+
+<details><summary>答え</summary>
+
+1. 全部 `placed`。①の SQL の `DEFAULT 'placed'` で埋まり、そのあと既定値は外される（検証済み）
+2. 保存できる。`choices` は DB に決まりを作らないから。`get_status_display()` も `flying` をそのまま返す（検証済み）
+3. 保存できる。管理画面は「3つのどれか」までは確かめるが、`change_status()` は通らない（検証済み）。管理画面はデータを見る窓で、業務の操作口にはしない
+
+</details>
+
+### 6-7. ✅ 想起チェック
+
+1. `TextChoices` の1行 `SHIPPED = "shipped", "発送済み"` で、台帳に入るのはどっち？
+2. 「確定から完了に飛べない」というルールは、API の関数ではなくどこに書いた？ それはなぜ？
+
+<details><summary>答え</summary>
+
+1. `"shipped"`。`発送済み` は人が読む名前で、`get_status_display()` や管理画面で使われる
+2. モデルのメソッド（`change_status`）。どこから呼んでも同じルールが守られるから
+
+</details>
+
+### 6-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **決まった値は `TextChoices`、その値の変え方のルールはモデルのメソッドに書く。**
+
+📒 用語集に追記: `TextChoices` / `choices` / モデルメソッド / `is_staff`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ7` — レビューと集計
