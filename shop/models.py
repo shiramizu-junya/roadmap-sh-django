@@ -117,3 +117,26 @@ class OrderItem(models.Model):
 
     def __str__(self) -> str:
         return f"{self.product.name} x {self.quantity}"
+
+
+class Review(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="reviews")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    rating = models.IntegerField()  # 星の数（1〜5）
+    comment = models.TextField(blank=True)  # 感想。空でもよい
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # 1人1商品に1件まで
+            models.UniqueConstraint(
+                fields=["product", "user"], name="shop_review_unique_product_user"
+            ),
+            # 星は1〜5
+            models.CheckConstraint(
+                condition=Q(rating__gte=1, rating__lte=5), name="shop_review_rating_1_to_5"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product.name} ★{self.rating}"

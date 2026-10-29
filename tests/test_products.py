@@ -28,6 +28,8 @@ def test_list_products(product: Product) -> None:
             "price": "2980.00",  # 金額は文字列で返る
             "category_id": product.category_id,
             "stock": 5,
+            "review_count": 0,  # レビューはまだ無い
+            "rating_avg": None,
         }
     ]
 

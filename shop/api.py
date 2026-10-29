@@ -2,14 +2,14 @@ from datetime import datetime
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import Avg, Count, F
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 
-from .models import Cart, CartItem, Inventory, Order, OrderItem, Product
+from .models import Cart, CartItem, Inventory, Order, OrderItem, Product, Review
 
 # 商品の API 一式。URL の頭（/products）は config/api.py で決める
 router = Router()
@@ -21,17 +21,50 @@ class ProductOut(Schema):
     price: Decimal  # 金額。JSON では "1200.00" のような文字列になる
     category_id: int
     stock: int = Field(alias="inventory.quantity")  # 在庫の数（一対一の先をたどる）
+    review_count: int  # レビューの件数（annotate で付け足した値）
+    rating_avg: float | None  # 星の平均。レビューが無ければ null
+
+
+def products_with_rating():
+    # 在庫は JOIN で取り、レビューの件数と星の平均は MySQL に数えさせて、商品ごとに付け足す
+    return Product.objects.select_related("inventory").annotate(
+        review_count=Count("reviews"), rating_avg=Avg("reviews__rating")
+    )
 
 
 @router.get("", response=list[ProductOut])
 def list_products(request: HttpRequest):
-    # 在庫は一対一なので、JOIN で同じ SQL に入れる
-    return Product.objects.select_related("inventory").order_by("id")
+    return products_with_rating().order_by("id")
 
 
 @router.get("/{product_id}", response=ProductOut)
 def get_product(request: HttpRequest, product_id: int):
-    return get_object_or_404(Product.objects.select_related("inventory"), id=product_id)
+    return get_object_or_404(products_with_rating(), id=product_id)
+
+
+class ReviewIn(Schema):
+    rating: int = Field(ge=1, le=5)  # 星は1〜5。外れたら 422
+    comment: str = ""
+
+
+class ReviewOut(Schema):
+    id: int
+    product_id: int
+    user_id: int
+    rating: int
+    comment: str
+
+
+@router.post("/{product_id}/reviews", response={201: ReviewOut}, auth=JWTAuth())
+def create_review(request: HttpRequest, product_id: int, payload: ReviewIn):
+    product = get_object_or_404(Product, id=product_id)
+    assert request.user.is_authenticated
+    if Review.objects.filter(product=product, user=request.user).exists():
+        raise HttpError(409, "この商品には、もうレビューを書いています")
+    review = Review.objects.create(
+        product=product, user=request.user, rating=payload.rating, comment=payload.comment
+    )
+    return Status(201, review)
 
 
 # カートの API 一式。URL の頭（/cart）は config/api.py で決める
