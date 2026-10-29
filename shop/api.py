@@ -97,6 +97,7 @@ class OrderOut(Schema):
     total: Decimal
     created_at: datetime
     items: list[OrderItemOut]
+    status: Order.Status  # "placed" / "shipped" / "completed" のどれか
 
 
 @order_router.post("", response={201: OrderOut}, auth=JWTAuth())
@@ -133,3 +134,20 @@ def place_order(request: HttpRequest):
         cart.items.all().delete()  # カートを空にする
 
     return Status(201, order)
+
+
+class OrderStatusIn(Schema):
+    status: Order.Status  # 3つ以外の値は 422
+
+
+@order_router.patch("/{order_id}/status", response=OrderOut, auth=JWTAuth())
+def change_order_status(request: HttpRequest, order_id: int, payload: OrderStatusIn):
+    # 状態を進めるのはお店の人だけ（管理画面に入れるスタッフ）
+    if not request.user.is_staff:
+        raise HttpError(403, "お店の人しか変えられません")
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        order.change_status(payload.status)  # 進んでよいかは、モデルが決める
+    except ValueError as e:
+        raise HttpError(409, str(e)) from e
+    return order

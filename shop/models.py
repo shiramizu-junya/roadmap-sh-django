@@ -79,12 +79,32 @@ class CartItem(models.Model):
 
 
 class Order(models.Model):
+    class Status(models.TextChoices):
+        # 名前 = "台帳に入る値", "人が読む名前"
+        PLACED = "placed", "確定"
+        SHIPPED = "shipped", "発送済み"
+        COMPLETED = "completed", "完了"
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     total = models.DecimalField(max_digits=12, decimal_places=2)  # 合計金額（確定した時点）
+    # 注文の状態。選べる値は Status の3つ。作ったときは「確定」
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PLACED)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:
         return f"注文 {self.id}"
+
+    def change_status(self, new_status: str) -> None:
+        # 進んでよいのは「確定 → 発送済み → 完了」の順だけ（今の状態: 次に進める状態）
+        next_status: dict[str, str] = {
+            Order.Status.PLACED: Order.Status.SHIPPED,
+            Order.Status.SHIPPED: Order.Status.COMPLETED,
+        }
+        if next_status.get(self.status) != new_status:
+            new_label = Order.Status(new_status).label
+            raise ValueError(f"「{self.get_status_display()}」から「{new_label}」には進めません")
+        self.status = new_status
+        self.save(update_fields=["status"])
 
 
 class OrderItem(models.Model):
