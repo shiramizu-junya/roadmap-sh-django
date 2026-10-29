@@ -1946,3 +1946,338 @@ def test_customer_cannot_change_status(order: Order, auth_headers: dict[str, str
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ7` — レビューと集計
+
+
+---
+
+## 第3部-7: レビューと集計
+
+**❓ この回の問い**: 3-6 で、注文の流れができた。買った人は感想を残したい。商品一覧に「★4.5（2件）」を出すには、商品ごとにレビューを数える必要がある。商品が100個あったら、SQL は何本？
+
+**作るもの**: レビュー（星1〜5 と感想）を書く API。商品の一覧と詳細に、レビューの件数と星の平均を付ける
+**重要度**: 🔴 毎日使う — 「〜ごとの件数・合計・平均」は、一覧画面のたびに出てくる
+**前ステップとの接続**: 3-1 の商品 API の応答に、2つの項目を足す。2-4 の N+1 の考え方を「数える」に広げる
+
+### 7-0. このステップの初出
+
+**Django / Ninja**: `annotate()`, `Count` / `Avg`（集計関数） / **Python**: なし
+
+> 🧒 **かみくだくと**: **集計関数**（aggregate functions）は、何行かをまとめて1つの値にする計算。`Count` は件数、`Avg` は平均。SQL の `COUNT()`・`AVG()` になる。
+
+> 🧒 **かみくだくと**: **annotate()** は、取ってくる行の1つ1つに、計算した値を**付け足す**命令。「商品ごとの件数」のように、行ごとにまとめた値を付けられる。
+
+### 7-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① モデル**（`shop/models.py` の**最後**に追加）
+
+```python
+class Review(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="reviews")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    rating = models.IntegerField()  # 星の数（1〜5）
+    comment = models.TextField(blank=True)  # 感想。空でもよい
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # 1人1商品に1件まで
+            models.UniqueConstraint(
+                fields=["product", "user"], name="shop_review_unique_product_user"
+            ),
+            # 星は1〜5
+            models.CheckConstraint(
+                condition=Q(rating__gte=1, rating__lte=5), name="shop_review_rating_1_to_5"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product.name} ★{self.rating}"
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17（ruff・mypy も通過）
+
+`shop/admin.py` は、import を `Review` 入りに置き換え（1行に収まらないので、ruff が縦に並べる形）、最後に1行足す
+
+```python
+from .models import (
+    Cart,
+    CartItem,
+    Inventory,
+    Order,
+    OrderItem,
+    Product,
+    ProductImage,
+    Review,
+)
+```
+
+```python
+admin.site.register(Review)
+```
+
+```bash
+uv run python manage.py makemigrations shop
+uv run python manage.py migrate
+```
+
+✅ 検証済み: `shop/migrations/0005_review.py` ができる
+
+一意制約（3-2）とチェック制約（3-1）は、もう知っている道具です。新しいのは②からです。
+
+**② 件数と平均を付ける**（`shop/api.py`）
+
+import を2か所直す
+
+```diff
+-from django.db.models import F
++from django.db.models import Avg, Count, F
+```
+
+```diff
+-from .models import Cart, CartItem, Inventory, Order, OrderItem, Product
++from .models import Cart, CartItem, Inventory, Order, OrderItem, Product, Review
+```
+
+`ProductOut` の `stock` の行から、`get_product` の最後の行までを、まるごと置き換える
+
+```python
+    stock: int = Field(alias="inventory.quantity")  # 在庫の数（一対一の先をたどる）
+    review_count: int  # レビューの件数（annotate で付け足した値）
+    rating_avg: float | None  # 星の平均。レビューが無ければ null
+
+
+def products_with_rating():
+    # 在庫は JOIN で取り、レビューの件数と星の平均は MySQL に数えさせて、商品ごとに付け足す
+    return Product.objects.select_related("inventory").annotate(
+        review_count=Count("reviews"), rating_avg=Avg("reviews__rating")
+    )
+
+
+@router.get("", response=list[ProductOut])
+def list_products(request: HttpRequest):
+    return products_with_rating().order_by("id")
+
+
+@router.get("/{product_id}", response=ProductOut)
+def get_product(request: HttpRequest, product_id: int):
+    return get_object_or_404(products_with_rating(), id=product_id)
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+一覧と詳細の両方が同じ `ProductOut` を返すので、件数と平均の付け方を `products_with_rating()` の1か所にまとめました。片方だけ `annotate` を忘れると、`review_count` が無くて 500 になります。
+
+**③ レビューを書く API**（`get_product` のすぐ下に追加）
+
+```python
+class ReviewIn(Schema):
+    rating: int = Field(ge=1, le=5)  # 星は1〜5。外れたら 422
+    comment: str = ""
+
+
+class ReviewOut(Schema):
+    id: int
+    product_id: int
+    user_id: int
+    rating: int
+    comment: str
+
+
+@router.post("/{product_id}/reviews", response={201: ReviewOut}, auth=JWTAuth())
+def create_review(request: HttpRequest, product_id: int, payload: ReviewIn):
+    product = get_object_or_404(Product, id=product_id)
+    assert request.user.is_authenticated
+    if Review.objects.filter(product=product, user=request.user).exists():
+        raise HttpError(409, "この商品には、もうレビューを書いています")
+    review = Review.objects.create(
+        product=product, user=request.user, rating=payload.rating, comment=payload.comment
+    )
+    return Status(201, review)
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+`exists()` で 409 を返し、DB の一意制約を「最後の砦」にする形は、2-8 の会員登録と同じです。
+
+**④ 試す**（`ACCESS` は alice、`BOB` は bob。取り方は 3-4 と同じ）
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/products/1/reviews -H "Authorization: Bearer $ACCESS" \
+  -H "Content-Type: application/json" -d '{"rating": 5, "comment": "分かりやすい"}'
+curl -s -X POST http://127.0.0.1:8000/api/products/1/reviews -H "Authorization: Bearer $BOB" \
+  -H "Content-Type: application/json" -d '{"rating": 4}'
+curl -s http://127.0.0.1:8000/api/products
+```
+
+```text
+[{"id": 1, "name": "Django 入門", "price": "2980.00", "category_id": 1, "stock": ..., "review_count": 2, "rating_avg": 4.5}, {"id": 2, "name": "Python ノート", "price": "450.50", "category_id": 1, "stock": ..., "review_count": 0, "rating_avg": null}]
+```
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+一覧の SQL は、商品がいくつあっても **1本**です。
+
+```sql
+SELECT `shop_product`.`id`, ..., COUNT(`shop_review`.`id`) AS `review_count`, AVG(`shop_review`.`rating`) AS `rating_avg`, `shop_inventory`.`id`, ...
+FROM `shop_product`
+LEFT OUTER JOIN `shop_review` ON (`shop_product`.`id` = `shop_review`.`product_id`)
+LEFT OUTER JOIN `shop_inventory` ON (`shop_product`.`id` = `shop_inventory`.`product_id`)
+GROUP BY `shop_product`.`id`, `shop_inventory`.`id`
+ORDER BY `shop_product`.`id` ASC;
+```
+
+✅ 検証済み: MySQL 8.4.11（`CaptureQueriesContext` で取得。列の一部を `...` に省略）
+
+**⑤ テスト**
+
+`tests/test_products.py` の `test_list_products` は、応答をまるごと比べているので、2行足す（`"stock": 5,` の下）
+
+```python
+            "review_count": 0,  # レビューはまだ無い
+            "rating_avg": None,
+```
+
+`tests/test_reviews.py` を新しく作る。要件だけ書きます。
+
+1. 星4と星5のレビューがある商品を `GET /products/{id}` すると、`review_count` は `2`、`rating_avg` は `4.5`
+2. 同じ人が同じ商品に2回書くと、2回目は 409。レビューは1件のまま
+3. 星6は 422
+
+商品の fixture には、在庫の行も作ってください（無いと 3-1 のとおり 500）。
+
+<details><summary>解答例</summary>
+
+```python
+from decimal import Decimal
+
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Inventory, Product, Review
+
+client = TestClient(api)
+
+
+@pytest.fixture
+def book(db) -> Product:
+    category = Category.objects.create(name="本")
+    product = Product.objects.create(name="Django 入門", price=Decimal("2980"), category=category)
+    Inventory.objects.create(product=product, quantity=5)  # 在庫の行が無いと、商品の応答が 500
+    return product
+
+
+def test_rating_is_counted(user: User, book: Product) -> None:
+    bob = User.objects.create_user(username="bob", password="pass1234")
+    Review.objects.create(product=book, user=user, rating=4)
+    Review.objects.create(product=book, user=bob, rating=5)
+
+    body = client.get(f"/products/{book.id}").json()
+
+    assert body["review_count"] == 2
+    assert body["rating_avg"] == 4.5  # (4 + 5) / 2
+
+
+def test_review_twice_is_409(book: Product, auth_headers: dict[str, str]) -> None:
+    url = f"/products/{book.id}/reviews"
+    assert client.post(url, json={"rating": 5}, headers=auth_headers).status_code == 201
+
+    res = client.post(url, json={"rating": 1}, headers=auth_headers)
+
+    assert res.status_code == 409
+    assert Review.objects.count() == 1
+
+
+def test_rating_must_be_1_to_5(book: Product, auth_headers: dict[str, str]) -> None:
+    res = client.post(f"/products/{book.id}/reviews", json={"rating": 6}, headers=auth_headers)
+
+    assert res.status_code == 422
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`55 passed`。ruff・mypy も通過）
+
+### 7-2. 🔬 仕組み解剖
+
+| | `annotate()` | `Count` / `Avg` |
+| --- | --- | --- |
+| 正式名称 | QuerySet.annotate() | 集計関数（aggregation functions）。`django.db.models.Count` / `Avg` |
+| いつ・誰が | 一覧を評価したときに、Django が `GROUP BY` 付きの SELECT を1本作る。付け足した値は、各行の属性（`product.review_count`）になる | 計算するのは MySQL。`"reviews__rating"` は 2-11 と同じ `__` で、関連の先の項目を指す |
+| 発行される SQL | `... GROUP BY shop_product.id, shop_inventory.id` | `COUNT(shop_review.id)`・`AVG(shop_review.rating)` |
+| TS での対応物 | 対応物なし（ORM の機能）。Prisma の `_count` / `groupBy` が近い | 対応物なし（DB の機能）。Prisma の `_avg` が同じ役目 |
+| なぜこの設計 | 行を全部 Python に持ってきて数えると、転送も SQL の本数も増える。数えるのは DB の得意分野 | `LEFT OUTER JOIN` なので、レビューが0件の商品も消えずに残る（件数0・平均 `NULL`） |
+| 失敗すると | 別の関連の `Count` を2つ並べると、JOIN が掛け算になり、数が狂う（🔮の3） | `Avg` は、レビューが0件だと `None`。スキーマを `float` だけにすると 500 になるので、`float \| None` にした |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+```text
+  shop_product  shop_review (LEFT JOIN)  GROUP BY product
+  ------------  -----------------------  ------------------------
+  id=1          rating 4
+  id=1          rating 5                 -> COUNT 2, AVG 4.5
+  id=2          NULL (no review)         -> COUNT 0, AVG NULL
+```
+
+✅ 検証済み: ④の SQL と応答
+
+見てほしいのは、JOIN で商品の行が**レビューの数だけ**に増えたあと、`GROUP BY` で商品1行に戻っている点です。
+
+### 7-3. 🐍 Python注
+
+新しい文法はありません。
+
+### 7-4. 解説 — なぜこう設計するか
+
+`for p in products: p.reviews.count()` と書いても、同じ数は出ます。でも、SQL は「一覧1本 + 商品の数」になります（2-4 の N+1 と同じ形）。`annotate()` なら、商品が何個でも1本です。
+
+🧠 Django の考え方: 数える・足す・平均するは、行を Python に持ってこずに、DB にやらせる。結果だけを行に付けて受け取る。
+
+### 7-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 公式ドキュメントは、`annotate()` に複数の集計を並べると「JOIN になるので結果が間違う」と注意している。`Count` なら `distinct=True` で避けられる。それ以外の集計を並べたいときは、サブクエリなど別の書き方が要る。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/aggregation/#combining-multiple-aggregations
+
+### 7-6. 🔮 予測 → 動作確認
+
+1. 商品が2つある。`for p in Product.objects.all(): p.reviews.count()` と書くと、SQL は何本？
+2. 星が 4・4・5 の3件なら、`rating_avg` は？ `4.333333333333333` になる？
+3. 星3件・画像2枚の商品で、`annotate(rc=Count("reviews"), ic=Count("images"))` すると、`rc` と `ic` は？
+
+<details><summary>答え</summary>
+
+1. 3本。一覧で1本 + 商品ごとに `COUNT` が1本ずつ（検証済み）
+2. `4.3333`。MySQL は割り算の結果を、小数点以下4桁までで返す（`div_precision_increment` の既定値が `4`）。Django はそれを `float` にする（検証済み）
+   根拠: https://dev.mysql.com/doc/refman/8.4/en/server-system-variables.html#sysvar_div_precision_increment
+3. どちらも `6`（3 × 2）。レビューと画像を両方 JOIN すると、行が掛け算で増えるから。`Count("reviews", distinct=True)` にすると `3` と `2` に戻る（検証済み）
+
+</details>
+
+### 7-7. ✅ 想起チェック
+
+1. `annotate(review_count=Count("reviews"))` で付けた値は、Python のどこから読める？
+2. レビューが0件の商品は、一覧から消える？ 平均は何になる？
+
+<details><summary>答え</summary>
+
+1. 各商品の属性（`product.review_count`）。スキーマも同じ名前で読める
+2. 消えない（`LEFT OUTER JOIN` だから）。件数は `0`、平均は `None`（JSON では `null`）
+
+</details>
+
+### 7-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **「〜ごとの件数・平均」は `annotate()` と `Count` / `Avg` で、SQL 1本のうちに DB に数えさせる。**
+
+📒 用語集に追記: 集計関数（`Count` / `Avg`） / `annotate()` / `GROUP BY`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ8` — トランザクションのテスト

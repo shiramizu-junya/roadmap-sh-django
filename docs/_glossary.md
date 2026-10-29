@@ -111,3 +111,6 @@
 | `choices` | Field.choices | 項目に `TextChoices` の一覧を結びつける指定。確かめるのはスキーマ・`full_clean()`・管理画面で、DB には決まりを作らない | 第3部-6 |
 | モデルメソッド | model methods | モデルのクラスに書く関数。お店の決まり（業務ルール）をここに置くと、どこから呼んでも同じルールが守られる | 第3部-6 |
 | `is_staff` | User.is_staff | ユーザーが「お店の人（スタッフ）」かどうかの印。管理画面に入れるかどうかも、これで決まる | 第3部-6 |
+| 集計関数 | aggregation functions（`Count` / `Avg` など） | 何行かをまとめて1つの値にする計算。`Count` は件数、`Avg` は平均で、SQL の `COUNT()`・`AVG()` になる | 第3部-7 |
+| `annotate()` | QuerySet.annotate() | 取ってくる行の1つ1つに、計算した値を付け足す。集計関数と組むと「商品ごとの件数」が SQL 1本で取れる | 第3部-7 |
+| `GROUP BY` | GROUP BY（SQL） | 同じ値の行を1つのグループにまとめる SQL。`annotate()` で集計すると Django が付ける | 第3部-7 |
