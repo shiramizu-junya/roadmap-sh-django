@@ -2281,3 +2281,268 @@ def test_rating_must_be_1_to_5(book: Product, auth_headers: dict[str, str]) -> N
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ8` — トランザクションのテスト
+
+
+---
+
+## 第3部-8: トランザクションのテスト
+
+**❓ この回の問い**: 3-4 と 3-5 のテストは、2人を**順番に**通していた。だから、直す前のコードでも通ってしまった。本当に同時に走らせるテストは、なぜ今まで書けなかった？
+
+**作るもの**: 2本のスレッドで同時に注文するテスト。注文の確認メールを「確定してから」送る仕組みと、そのテスト
+**重要度**: 🟡 読めればよい — 毎回は書かない。でも、お金や在庫の処理には1本あると安心できる
+**前ステップとの接続**: 3-4・3-5 で予告した「同時のテスト」を、ここで回収する。2-13 の `send_mail` を、注文の確定に使う
+
+### 8-0. このステップの初出
+
+**Django / Ninja**: `django_db(transaction=True)`, `transaction.on_commit()` / **Python**: `threading`, `lambda`
+
+> 🧒 **かみくだくと**: ふだんのテスト（`@pytest.mark.django_db`）は、テスト全体を1つのトランザクションで包み、最後に**ロールバック**して片付けている。だから、テストの中の書き込みは一度も確定しない。`transaction=True` を付けると、包まずに**本当に確定**させ、テストの最後に全部の台帳を空にして片付ける。
+
+> 🧒 **かみくだくと**: **on_commit()** は、「このトランザクションが確定したら、これをやって」という予約。取り消されたら、予約ごと捨てられる。
+
+### 8-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 確認メールを予約する**（`shop/api.py`）
+
+import を1行足す（`from django.db import transaction` の上）
+
+```python
+from django.core.mail import send_mail
+```
+
+`place_order` の `order = Order.objects.create(...)` のすぐ下に足す
+
+```python
+        email = request.user.email
+        if email:
+            # 確認メールは、注文が確定（COMMIT）したあとに送る。取り消されたら送らない
+            transaction.on_commit(
+                lambda: send_mail(
+                    subject=f"注文 {order.id} を受け付けました",
+                    message=f"合計 {total} 円",
+                    from_email=None,
+                    recipient_list=[email],
+                )
+            )
+```
+
+✅ 検証済み: Django 5.2.17（ruff・mypy も通過）
+
+予約は、在庫を確かめる**前**にしています。在庫が足りずに 409 で取り消されると、予約も捨てられます。わざと `send_mail(...)` を直接呼ぶ形にすると、409 なのにメールが1通出ました（検証済み）。
+
+> 💡補足: `request.user.email` をいったん `email` に入れているのは、mypy のため。`lambda` の中では、上の `assert` で絞った「ログイン済み」の情報が、mypy に引き継がれない。
+
+**② テストを書く**（`tests/test_transactions.py` 新規）
+
+これまでの `auth_headers` は、ふだんのテスト用です。このファイルでは、ユーザーも中で作ります。
+
+```python
+import threading
+from decimal import Decimal
+
+import pytest
+from django.db import connection
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Cart, CartItem, Inventory, Order, Product
+
+client = TestClient(api)
+
+
+def login(username: str) -> dict[str, str]:
+    User.objects.create_user(username=username, password="pass1234")
+    res = client.post("/auth/login", json={"username": username, "password": "pass1234"})
+    return {"Authorization": f"Bearer {res.json()['access']}"}
+
+
+def post_at_the_same_time(url: str, headers_list: list[dict[str, str]]) -> list[int]:
+    # 1人1スレッドで、同時に POST する。返すのはステータスコードの一覧
+    statuses: list[int] = []
+    start = threading.Barrier(len(headers_list))  # 全員そろってから、同時に走り出す
+
+    def post(headers: dict[str, str]) -> None:
+        start.wait()
+        statuses.append(client.post(url, headers=headers).status_code)
+        connection.close()  # このスレッドが開いた DB 接続を閉じる
+
+    threads = [threading.Thread(target=post, args=(h,)) for h in headers_list]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()  # 全員終わるまで待つ
+    return statuses
+
+
+@pytest.mark.django_db(transaction=True)  # 本当に COMMIT する（テストの最後に全部消す）
+def test_last_one_is_sold_once_even_at_the_same_time() -> None:
+    category = Category.objects.create(name="本")
+    book = Product.objects.create(name="Django 入門", price=Decimal("2980"), category=category)
+    Inventory.objects.create(product=book, quantity=1)  # 最後の1個
+    headers = [login("alice"), login("bob")]
+    for user in User.objects.all():
+        CartItem.objects.create(cart=Cart.objects.create(user=user), product=book, quantity=1)
+
+    statuses = post_at_the_same_time("/orders", headers)
+
+    assert sorted(statuses) == [201, 409]  # 1人だけ買える
+    assert Order.objects.count() == 1
+    assert Inventory.objects.get(product=book).quantity == 0
+```
+
+✅ 検証済み: pytest-django 4.14.0（ruff・mypy も通過）
+
+直す前のコード（3-3 の「読んで、引いて、書く」）に戻して10回走らせると、**10回とも落ちました**（`assert [201, 201] == [201, 409]`）。今のコードでは通ります。
+
+続けて、要件だけ書きます（同じファイルに足す）。
+
+1. 3-5 の2度押し: 同じ人の身分証で同時に2回注文すると、`[201, 400]`。在庫5は `4` になる
+2. メールアドレスのある人が注文すると 201 で、`mailoutbox` に1通（宛先はその人）
+3. 在庫0の商品を注文すると 409 で、`mailoutbox` は0通
+
+<details><summary>解答例</summary>
+
+```python
+@pytest.mark.django_db(transaction=True)
+def test_double_click_orders_once() -> None:
+    category = Category.objects.create(name="本")
+    book = Product.objects.create(name="Django 入門", price=Decimal("2980"), category=category)
+    Inventory.objects.create(product=book, quantity=5)
+    headers = login("alice")
+    cart = Cart.objects.create(user=User.objects.get(username="alice"))
+    CartItem.objects.create(cart=cart, product=book, quantity=1)
+
+    statuses = post_at_the_same_time("/orders", [headers, headers])  # 同じ人が2回
+
+    assert sorted(statuses) == [201, 400]  # 2回目は、空のカートを見る
+    assert Inventory.objects.get(product=book).quantity == 4
+
+
+def put_book_in_cart(username: str, stock: int) -> dict[str, str]:
+    # 在庫 stock の本を、メールアドレスのある人のカートに1個入れる
+    headers = login(username)
+    user = User.objects.get(username=username)
+    user.email = f"{username}@example.com"
+    user.save()
+    category = Category.objects.create(name="本")
+    book = Product.objects.create(name="Django 入門", price=Decimal("2980"), category=category)
+    Inventory.objects.create(product=book, quantity=stock)
+    CartItem.objects.create(cart=Cart.objects.create(user=user), product=book, quantity=1)
+    return headers
+
+
+@pytest.mark.django_db(transaction=True)
+def test_mail_is_sent_after_commit(mailoutbox) -> None:
+    headers = put_book_in_cart("alice", stock=5)
+
+    assert client.post("/orders", headers=headers).status_code == 201
+
+    assert len(mailoutbox) == 1
+    assert mailoutbox[0].to == ["alice@example.com"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_no_mail_when_rolled_back(mailoutbox) -> None:
+    headers = put_book_in_cart("alice", stock=0)  # 在庫なし
+
+    assert client.post("/orders", headers=headers).status_code == 409
+
+    assert len(mailoutbox) == 0  # 取り消された注文のメールは送られない
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`59 passed`。ruff・mypy も通過）
+
+2度押しのテストも、鍵（`select_for_update()`）を外すと10回とも落ちました（`[201, 201]`）。これで 3-4・3-5 の ⏭️ を回収しました。
+
+### 8-2. 🔬 仕組み解剖
+
+| | `django_db(transaction=True)` | `transaction.on_commit()` |
+| --- | --- | --- |
+| 正式名称 | pytest-django の `django_db` マーカーの `transaction` 引数（Django の `TransactionTestCase` と同じ動き） | django.db.transaction.on_commit |
+| いつ・誰が | ふだんは pytest-django がテストを `BEGIN` で包み、最後に `ROLLBACK`。`transaction=True` なら包まず、テストのあとで全部の台帳を空にする（MySQL では `DELETE FROM`） | 呼んだときは予約するだけ。いちばん外側の `atomic` が `COMMIT` した直後に、Django が予約を実行する。`ROLLBACK` なら捨てる |
+| 発行される SQL | ふだんのテストの中の `atomic` は、`SAVEPOINT` … `ROLLBACK TO SAVEPOINT` になる（確認済み） | なし（Python の中の予約） |
+| TS での対応物 | 対応物なし。Jest でも、DB を本当に確定させるかは自分で決める | 対応物なし（Django の機能）。Prisma の `$transaction` が終わってから書く処理が近い |
+| なぜこの設計 | 包んで捨てるほうが速い。ただ、確定しないので、別のスレッドからは見えないし、`on_commit` も動かない | メールや外部への通知は、取り消せない。「確定したことだけを知らせる」ために、確定を待つ |
+| 失敗すると | `transaction=True` を外すと、メールのテストは `assert 0 == 1` で落ちる（確認済み）。テストのたびに台帳を空にするので遅い | `atomic` の外で呼ぶと、その場ですぐ実行される。予約にならない |
+
+✅ 検証済み: Django 5.2.17 / pytest-django 4.14.0 / MySQL 8.4.11
+
+```text
+  @pytest.mark.django_db                  @pytest.mark.django_db(transaction=True)
+  --------------------------------------  ----------------------------------------
+  BEGIN (pytest-django)
+    atomic() -> SAVEPOINT                 atomic() -> BEGIN
+    on_commit(send_mail) -> wait          on_commit(send_mail) -> wait
+    end -> RELEASE SAVEPOINT              end -> COMMIT -> send_mail runs
+  ROLLBACK (test data gone)               DELETE FROM all tables (test data gone)
+
+  send_mail never runs                    other threads see the data
+  other threads see nothing               slower
+```
+
+✅ 検証済み: 左は `CaptureQueriesContext` で取った SQL、右は②のテスト
+
+見てほしいのは左の列です。テストの中の `atomic` は、外側の `BEGIN` の中の「しおり」（`SAVEPOINT`）になるだけで、`COMMIT` まで届きません。
+
+### 8-3. 🐍 Python注
+
+> 🐍 **Python注**: `threading.Thread(target=post, args=(h,))` は、`post(h)` を別のスレッドで動かす準備。`start()` で走り出し、`join()` で終わりを待つ。`(h,)` の `,` は「要素1つのタプル」の印。
+
+> 🐍 **Python注**: `lambda: send_mail(...)` は、名前の無い小さな関数（TS の `() => sendMail(...)`）。その場では呼ばず、「あとで呼ぶもの」として渡す。
+
+### 8-4. 解説 — なぜこう設計するか
+
+ふだんのテストを全部 `transaction=True` にしないのは、遅いからです。テストのたびに、全部の台帳を空にします。この教材では、「同時に走らせる」と「確定を待つ」を試すテストだけを、別のファイルにまとめました。
+
+🧠 Django の考え方: 取り消せないこと（メール・外部への通知）は、`on_commit()` で確定のあとに回す。確定を確かめるテストだけ、本当に確定させる。
+
+### 8-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: `on_commit()` が予約されたことだけを確かめたいなら、pytest-django の `django_capture_on_commit_callbacks` を使うと、`transaction=True` にせず（速いまま）予約を取り出して実行できる。
+> 根拠: https://pytest-django.readthedocs.io/en/latest/helpers.html#django-capture-on-commit-callbacks
+
+### 8-6. 🔮 予測 → 動作確認
+
+1. メールのテストから `transaction=True` を外し、`@pytest.mark.django_db` だけにすると？
+2. ふだんのテストで、在庫不足の注文（409）を送ると、SQL に `BEGIN` / `ROLLBACK` は出る？
+3. `post` の中の `connection.close()` は何のため？
+
+<details><summary>答え</summary>
+
+1. 落ちる（`assert 0 == 1`）。テストの外側のトランザクションが確定しないので、予約したメールが送られない（検証済み）
+2. 出ない。`SAVEPOINT` → `ROLLBACK TO SAVEPOINT` → `RELEASE SAVEPOINT` になる。外側は pytest-django が開いた `BEGIN` のまま（検証済み）
+3. Django の DB 接続は、スレッドごとに1本ずつ開かれる。スレッドが終わっても、自分で閉じないと開いたまま残る
+
+</details>
+
+### 8-7. ✅ 想起チェック
+
+1. ふだんのテストでは、なぜ別のスレッドから、テストで作った商品が見えない？
+2. 確認メールを `on_commit()` で送るのはなぜ？
+
+<details><summary>答え</summary>
+
+1. テストの書き込みが、ロールバック前提の大きなトランザクションの中にあり、一度も確定しないから
+2. 注文が取り消されたとき、メールだけ送られてしまわないようにするため
+
+</details>
+
+### 8-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **確定してから起きること（`on_commit()`・別スレッドからの見え方）は、`transaction=True` のテストで確かめる。**
+
+📒 用語集に追記: `transaction=True`（トランザクションのテスト） / `on_commit()` / セーブポイント
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第3部 ステップ9` — クエリの総点検

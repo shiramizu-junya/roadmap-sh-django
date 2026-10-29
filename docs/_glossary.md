@@ -114,3 +114,6 @@
 | 集計関数 | aggregation functions（`Count` / `Avg` など） | 何行かをまとめて1つの値にする計算。`Count` は件数、`Avg` は平均で、SQL の `COUNT()`・`AVG()` になる | 第3部-7 |
 | `annotate()` | QuerySet.annotate() | 取ってくる行の1つ1つに、計算した値を付け足す。集計関数と組むと「商品ごとの件数」が SQL 1本で取れる | 第3部-7 |
 | `GROUP BY` | GROUP BY（SQL） | 同じ値の行を1つのグループにまとめる SQL。`annotate()` で集計すると Django が付ける | 第3部-7 |
+| `transaction=True` | pytest.mark.django_db(transaction=True)（TransactionTestCase と同じ動き） | テストを1つのトランザクションで包まず、書き込みを本当に確定させる。テストのあとで全部の台帳を空にするので遅い | 第3部-8 |
+| `on_commit()` | django.db.transaction.on_commit | 「確定したらこれをやって」という予約。取り消されたら予約ごと捨てられる。メールや外部への通知に使う | 第3部-8 |
+| セーブポイント | savepoint | トランザクションの中に挟む「しおり」。`atomic` を入れ子にすると、内側はここまでの取り消しになる | 第3部-8 |
