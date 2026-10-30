@@ -120,3 +120,7 @@
 | `Prefetch` | django.db.models.Prefetch | `prefetch_related` の取り方を細かく指定する札。`queryset=` に `select_related` などを足して、入れ子の関連も少ない SQL で取れる | 第3部-9 |
 | 実行計画 / `explain()` | execution plan / QuerySet.explain() | MySQL が SQL をどう探すかの段取り。`explain()` で見られる。下（字下げの深いほう）から読む | 第3部-9 |
 | 索引（インデックス） | index | 「この値の行はここ」とすぐ引くために、MySQL が別に持つ表。`ForeignKey` には Django が自動で付ける。無い項目で絞ると `Table scan`（全部読む） | 第3部-9 |
+| オリジン | origin | 「どこから来たページか」の住所。方式・ホスト・ポートの3つの組で、1つでも違えば別のオリジン | 第4部-1 |
+| CORS | Cross-Origin Resource Sharing（オリジン間リソース共有） | 別のオリジンのページに応答を読ませてよいかを、サーバが応答のヘッダ（`Access-Control-Allow-Origin`）で伝える仕組み。読ませるか決めるのはブラウザ | 第4部-1 |
+| プリフライト | preflight request | ヘッダ付きの POST などの前に、ブラウザが `OPTIONS` で「送ってよいか」を下見する問い合わせ | 第4部-1 |
+| `CORS_ALLOWED_ORIGINS` | django-cors-headers の設定 | 応答を読ませてよいオリジンの一覧。パスは付けない（`http://localhost:5173`） | 第4部-1 |
