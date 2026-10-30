@@ -2798,3 +2798,628 @@ def test_query_count_does_not_grow(
 これで第3部の本編は終わりです。分からなかった箇所は `# TODO: わからん` を残して、先に進んで大丈夫です。
 
 ▶ **次**: `M2: 第3部` — 白紙再現と宿題
+
+
+---
+
+## 第3部のまとめ（M2）— 白紙再現と宿題
+
+ここまでで、EC 風の API（商品・カート・注文・レビュー）がそろいました。最後に、**思い出して書く練習**をして定着させます。
+
+> ✍️ **翌日にやってください。** 書いた直後だと、短い記憶だけで書けてしまい、練習になりません。
+
+### 1. 白紙再現（3段階から選ぶ）
+
+| 段階 | やること | 判定 |
+| --- | --- | --- |
+| **Lv1 穴埋め** | 下のコードの `____` を埋める | `uv run pytest` が全部通る（`59 passed`。3-8 の残り3件を書いていれば `62 passed`） |
+| **Lv2 ファイル単位** | `shop/api.py` を閉じ、白紙から書き直す（`shop/models.py` でもよい） | 同上。ruff・mypy も通る |
+| **Lv3 構成から** | 要件だけを見て、どのファイルに何を書くかから組み立てる | 同上 |
+
+> ✍️ まず Lv1 から。できたら次回 Lv2 に上げる。
+> 思い出せなかった箇所に印を付け、**その箇所の 🔬 仕組み解剖だけ**読み返してください。
+
+#### Lv1 穴埋め
+
+`shop/api.py` を別名で退避（`cp shop/api.py /tmp/shop_api.py.bak`）してから、次のコードを**全文**貼って `____` を埋めます。同じ番号には同じ言葉が入ります。
+
+```python
+from datetime import datetime
+from decimal import Decimal
+
+from django.core.mail import send_mail
+from django.db import transaction
+from django.db.models import ____①____, ____②____, ____③____, ____④____
+from django.http import HttpRequest
+from django.shortcuts import get_object_or_404
+from ninja import Field, Router, Schema, Status
+from ninja.errors import HttpError
+from ninja_jwt.authentication import JWTAuth
+
+from .models import Cart, CartItem, Inventory, Order, OrderItem, Product, Review
+
+# 商品の API 一式。URL の頭（/products）は config/api.py で決める
+router = Router()
+
+
+class ProductOut(Schema):
+    id: int
+    name: str
+    price: Decimal  # 金額。JSON では "1200.00" のような文字列になる
+    category_id: int
+    stock: int = Field(alias="inventory.quantity")  # 在庫の数（一対一の先をたどる）
+    review_count: int  # レビューの件数（annotate で付け足した値）
+    rating_avg: float | None  # 星の平均。レビューが無ければ null
+
+
+def products_with_rating():
+    # 在庫は JOIN で取り、レビューの件数と星の平均は MySQL に数えさせて、商品ごとに付け足す
+    return Product.objects.select_related("inventory").____⑤____(
+        review_count=____②____("reviews"), rating_avg=____①____("reviews__rating")
+    )
+
+
+@router.get("", response=list[ProductOut])
+def list_products(request: HttpRequest):
+    return products_with_rating().order_by("id")
+
+
+@router.get("/{product_id}", response=ProductOut)
+def get_product(request: HttpRequest, product_id: int):
+    return get_object_or_404(products_with_rating(), id=product_id)
+
+
+class ReviewIn(Schema):
+    rating: int = Field(ge=1, le=5)  # 星は1〜5。外れたら 422
+    comment: str = ""
+
+
+class ReviewOut(Schema):
+    id: int
+    product_id: int
+    user_id: int
+    rating: int
+    comment: str
+
+
+@router.post("/{product_id}/reviews", response={201: ReviewOut}, auth=JWTAuth())
+def create_review(request: HttpRequest, product_id: int, payload: ReviewIn):
+    product = get_object_or_404(Product, id=product_id)
+    assert request.user.is_authenticated
+    if Review.objects.filter(product=product, user=request.user).____⑥____():
+        raise HttpError(409, "この商品には、もうレビューを書いています")
+    review = Review.objects.create(
+        product=product, user=request.user, rating=payload.rating, comment=payload.comment
+    )
+    return Status(201, review)
+
+
+# カートの API 一式。URL の頭（/cart）は config/api.py で決める
+cart_router = Router()
+
+
+class CartItemIn(Schema):
+    product_id: int
+    quantity: int = Field(default=1, ge=1)  # 省略したら1個。0以下は 422
+
+
+class CartItemOut(Schema):
+    product_id: int
+    name: str = Field(alias="product.name")
+    price: Decimal = Field(alias="product.price")
+    quantity: int
+
+
+class CartOut(Schema):
+    items: list[CartItemOut]
+    total: Decimal  # 合計金額
+
+
+@cart_router.post("/items", response={201: CartItemOut}, auth=JWTAuth())
+def add_to_cart(request: HttpRequest, payload: CartItemIn):
+    product = get_object_or_404(Product, id=payload.product_id)
+    assert request.user.is_authenticated
+    # 自分のカートを取る。無ければ作る
+    cart, _ = Cart.objects.____⑦____(user=request.user)
+    # 同じ商品の行を取る。無ければ、入れた数で作る
+    item, created = CartItem.objects.____⑦____(
+        cart=cart, product=product, defaults={"quantity": payload.quantity}
+    )
+    if not created:
+        # もう入っていたら、行は増やさずに数を足す。足し算は MySQL にさせる
+        CartItem.objects.filter(id=item.id).____⑧____(quantity=____③____("quantity") + payload.quantity)
+        item = CartItem.objects.get(id=item.id)  # 足したあとの数を読み直す
+
+    return Status(201, item)
+
+
+@cart_router.get("", response=CartOut, auth=JWTAuth())
+def get_cart(request: HttpRequest):
+    assert request.user.is_authenticated
+    cart, _ = Cart.objects.____⑦____(user=request.user)
+    items = cart.items.select_related("product").order_by("id")
+    total = sum((item.product.price * item.quantity for item in items), Decimal("0"))
+    return {"items": items, "total": total}
+
+
+# 注文の API 一式。URL の頭（/orders）は config/api.py で決める
+order_router = Router()
+
+
+class OrderItemOut(Schema):
+    product_id: int
+    price: Decimal  # 買った時点の価格
+    quantity: int
+    name: str = Field(alias="product.name")  # 商品名（明細 → 商品とたどる）
+
+
+class OrderOut(Schema):
+    id: int
+    total: Decimal
+    created_at: datetime
+    items: list[OrderItemOut]
+    status: Order.Status  # "placed" / "shipped" / "completed" のどれか
+
+
+@order_router.post("", response={201: OrderOut}, auth=JWTAuth())
+def place_order(request: HttpRequest):
+    assert request.user.is_authenticated
+    # ここから下は「全部やるか、何もしないか」。途中で例外が出たら、全部取り消す
+    with transaction.____⑨____():
+        # カートの行に鍵をかけて読む。同じカートの2つ目の注文は、1つ目が終わるまでここで待つ
+        cart = get_object_or_404(Cart.objects.____⑩____(), user=request.user)
+        cart_items = list(cart.items.select_related("product"))
+        if not cart_items:
+            raise HttpError(400, "カートが空です")
+
+        total = sum((ci.product.price * ci.quantity for ci in cart_items), Decimal("0"))
+        order = Order.objects.create(user=request.user, total=total)
+
+        email = request.user.email
+        if email:
+            # 確認メールは、注文が確定（COMMIT）したあとに送る。取り消されたら送らない
+            transaction.____⑪____(
+                lambda: send_mail(
+                    subject=f"注文 {order.id} を受け付けました",
+                    message=f"合計 {total} 円",
+                    from_email=None,
+                    recipient_list=[email],
+                )
+            )
+
+        # 注文の明細を、INSERT 1本でまとめて作る
+        OrderItem.objects.____⑫____(
+            [
+                OrderItem(
+                    order=order, product=ci.product, price=ci.product.price, quantity=ci.quantity
+                )
+                for ci in cart_items
+            ]
+        )
+        for ci in cart_items:
+            # 在庫が足りているときだけ減らす。比べるのも引くのも、MySQL が UPDATE 1本の中でやる
+            updated = Inventory.objects.filter(
+                product=ci.product, ____⑬____=ci.quantity
+            ).____⑧____(quantity=____③____("quantity") - ci.quantity)
+            if updated == 0:
+                # 例外で with を抜けると、上で作った注文と明細も無かったことになる
+                raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")
+
+        cart.items.all().delete()  # カートを空にする
+
+    return Status(201, order)
+
+
+@order_router.get("", response=list[OrderOut], auth=JWTAuth())
+def list_orders(request: HttpRequest):
+    assert request.user.is_authenticated
+    return (
+        Order.objects.filter(user=request.user)
+        # 明細はまとめて1本で取る。そのとき、明細の商品も JOIN で一緒に取る
+        .prefetch_related(____④____("items", queryset=OrderItem.objects.select_related("product")))
+        .order_by("-created_at", "-id")  # 新しい注文から
+    )
+
+
+class OrderStatusIn(Schema):
+    status: Order.Status  # 3つ以外の値は 422
+
+
+@order_router.patch("/{order_id}/status", response=OrderOut, auth=JWTAuth())
+def change_order_status(request: HttpRequest, order_id: int, payload: OrderStatusIn):
+    # 状態を進めるのはお店の人だけ（管理画面に入れるスタッフ）
+    if not request.user.____⑭____:
+        raise HttpError(403, "お店の人しか変えられません")
+    order = get_object_or_404(Order, id=order_id)
+    try:
+        order.____⑮____(payload.status)  # 進んでよいかは、モデルが決める
+    except ValueError as e:
+        raise HttpError(409, str(e)) from e
+    return order
+```
+
+⚠️ 未実行（穴埋め用のため、このままでは動かない。検証手順: 埋めたあと `uv run pytest`）
+
+<details><summary>答え</summary>
+
+① `Avg`（3-7）
+② `Count`（3-7）
+③ `F`（3-4）
+④ `Prefetch`（3-9）
+⑤ `annotate`（3-7）
+⑥ `exists`（3-7。2-8 と同じ形）
+⑦ `get_or_create`（3-2）
+⑧ `update`（3-4）
+⑨ `atomic`（3-3）
+⑩ `select_for_update`（3-5）
+⑪ `on_commit`（3-8）
+⑫ `bulk_create`（3-3）
+⑬ `quantity__gte`（3-4）
+⑭ `is_staff`（3-6）
+⑮ `change_status`（3-6）
+
+埋めた全体は、第3部-9 までの `shop/api.py` と1文字違わず同じです（機械的に照合済み）。
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（`59 passed`）
+
+</details>
+
+終わったら、退避したファイルを戻してください（`cp /tmp/shop_api.py.bak shop/api.py`）。
+
+#### Lv3 の要件
+
+- 商品（カテゴリは第2部のもの）・在庫（一対一）・カート・注文・明細・レビューの台帳。金額は `DecimalField`。在庫・価格・星の範囲は DB の決まり（チェック制約）で守る
+- カートは1人1つ、同じ商品は1行にまとめて数を足す。足し算は DB にさせる
+- 注文の確定は「注文・明細・在庫を減らす・カートを空にする」を全部か何もしないか。在庫が足りなければ 409。最後の1個を2人が同時に買っても、2度押ししても壊れない
+- 注文は「確定 → 発送済み → 完了」の順にしか進まない（スタッフだけ）。確定したら確認メール（取り消されたら送らない）
+- 商品一覧に、レビューの件数と星の平均。注文履歴は、注文が何件でも SQL 3本
+
+### 2. 宿題
+
+**宿題はブランチを切ってやってください。** 第4部は、第3部の終わりの状態から始まるためです。
+
+```bash
+git switch -c homework-p3   # 宿題用のブランチを作って移る
+# … 宿題をやる …
+git switch main             # 終わったら main に戻る
+```
+
+⚠️ 未実行（Git の操作のため。検証手順: `git branch` で今いるブランチを確認）
+
+#### Lv1 基礎確認 — 在庫のある商品だけ
+
+**課題**: 商品一覧に `?in_stock=true` を足し、在庫が1以上の商品だけを返す。付けなければ、今までどおり全部。
+
+**ヒント**: 2-11 と 第2部の宿題 Lv1 で、関連の先の項目を `__` でたどって絞り込んだ。一対一の先（在庫）でも同じ。「より大きい」は `gt`。
+
+**判定基準**:
+- `curl -s "http://127.0.0.1:8000/api/products?in_stock=true"` に、在庫0の商品が出ない
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`shop/api.py`（`list_products` を、まるごと置き換える）
+
+```python
+@router.get("", response=list[ProductOut])
+def list_products(request: HttpRequest, in_stock: bool = False):
+    products = products_with_rating().order_by("id")
+    if in_stock:
+        # 一対一の先（在庫）の項目も、__ でたどって絞り込める
+        products = products.filter(inventory__quantity__gt=0)
+    return products
+```
+
+`tests/test_homework_p3_lv1.py`（新規）
+
+```python
+from decimal import Decimal
+
+from ninja.testing import TestClient
+
+from blog.models import Category
+from config.api import api
+from shop.models import Inventory, Product
+
+client = TestClient(api)
+
+
+def test_in_stock_only(db) -> None:
+    category = Category.objects.create(name="本")
+    for name, stock in [("ある", 3), ("ない", 0)]:
+        product = Product.objects.create(name=name, price=Decimal("100"), category=category)
+        Inventory.objects.create(product=product, quantity=stock)
+
+    assert [p["name"] for p in client.get("/products?in_stock=true").json()] == ["ある"]
+    assert len(client.get("/products").json()) == 2  # 付けなければ全部
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過）
+
+`?in_stock=true` の `true` は、Ninja が `bool` に変えてくれます。`1`・`yes`・`on` でも `True` になり、`abc` なら 422 です（検証済み）。
+
+根拠: https://docs.djangoproject.com/en/5.2/topics/db/queries/#lookups-that-span-relationships
+
+</details>
+
+#### Lv2 応用 — 注文を取り消す
+
+**課題**: `POST /api/orders/{order_id}/cancel` を作る。ログイン必須で、自分の注文だけ。取り消せるのは「確定」のときだけで、在庫を買った数だけ戻し、状態を「キャンセル」にする。
+
+**ヒント**:
+- 状態を1つ足すのは 3-6 の `TextChoices`。`choices` を変えると、マイグレーションが1つできる
+- 「取り消せるか」はお店の決まりなので、3-6 と同じくモデルのメソッドに書く
+- 在庫を戻すのは 3-4 の `F()`。戻すのと状態を変えるのは、3-3 の `atomic` で1かたまりに
+- 同じ注文の取り消しが同時に2回来たら？ 3-5 を思い出す
+
+**判定基準**:
+- 確定の注文を取り消すと 200 で `"status": "canceled"`、在庫が戻る
+- 2回目と、発送済みの注文は 409（在庫は戻さない）。他人の注文は 404
+- 同時に2回取り消しても、在庫は1回だけ戻る（`transaction=True` のテスト）
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`shop/models.py`（import を2行置き換える）
+
+```python
+from django.db import models, transaction
+from django.db.models import F, Q
+```
+
+`class Status` に1行足す（`COMPLETED` の下）
+
+```python
+        CANCELED = "canceled", "キャンセル"
+```
+
+`change_status` の下に追加
+
+```python
+    def cancel(self) -> None:
+        # 取り消せるのは「確定」のときだけ。在庫を戻すのと状態を変えるのは、全部か何もしないか
+        with transaction.atomic():
+            # 同じ注文の取り消しが同時に来ても、在庫を2回戻さないように鍵をかけて読み直す
+            order = Order.objects.select_for_update().get(id=self.id)
+            if order.status != Order.Status.PLACED:
+                raise ValueError(f"「{order.get_status_display()}」の注文は取り消せません")
+            for item in order.items.all():
+                Inventory.objects.filter(product_id=item.product_id).update(
+                    quantity=F("quantity") + item.quantity
+                )
+            order.status = Order.Status.CANCELED
+            order.save(update_fields=["status"])
+        self.status = order.status
+```
+
+```bash
+uv run python manage.py makemigrations shop   # 0006_alter_order_status.py ができる
+uv run python manage.py migrate
+```
+
+`shop/api.py`（ファイルの最後に追加）
+
+```python
+@order_router.post("/{order_id}/cancel", response=OrderOut, auth=JWTAuth())
+def cancel_order(request: HttpRequest, order_id: int):
+    # 自分の注文に限る（他人の注文は、あるかどうかも教えずに 404）
+    order = get_object_or_404(Order, id=order_id, user_id=request.user.id)
+    try:
+        order.cancel()
+    except ValueError as e:
+        raise HttpError(409, str(e)) from e
+    return order
+```
+
+`tests/test_homework_p3_lv2.py`（新規。3-8 の `login` と `post_at_the_same_time` を使い回す）
+
+```python
+from decimal import Decimal
+
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Inventory, Order, OrderItem, Product
+from tests.test_transactions import login, post_at_the_same_time
+
+client = TestClient(api)
+
+
+def make_order(user: User) -> Order:
+    # 在庫3の本を2個買った「確定」の注文（在庫は買ったあとの3）
+    category = Category.objects.create(name="本")
+    book = Product.objects.create(name="Django 入門", price=Decimal("2980"), category=category)
+    Inventory.objects.create(product=book, quantity=3)
+    order = Order.objects.create(user=user, total=Decimal("5960"))
+    OrderItem.objects.create(order=order, product=book, price=book.price, quantity=2)
+    return order
+
+
+def stock() -> int:
+    return Inventory.objects.get().quantity
+
+
+def test_cancel_returns_stock(user: User, auth_headers: dict[str, str]) -> None:
+    order = make_order(user)
+
+    res = client.post(f"/orders/{order.id}/cancel", headers=auth_headers)
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "canceled"
+    assert stock() == 5  # 3 + 2
+
+
+def test_cannot_cancel_twice(user: User, auth_headers: dict[str, str]) -> None:
+    order = make_order(user)
+    client.post(f"/orders/{order.id}/cancel", headers=auth_headers)
+
+    assert client.post(f"/orders/{order.id}/cancel", headers=auth_headers).status_code == 409
+    assert stock() == 5  # 2回目は戻さない
+
+
+def test_cannot_cancel_after_shipping(user: User, auth_headers: dict[str, str]) -> None:
+    order = make_order(user)
+    order.change_status(Order.Status.SHIPPED)
+
+    assert client.post(f"/orders/{order.id}/cancel", headers=auth_headers).status_code == 409
+    assert stock() == 3  # 戻さない
+
+
+def test_other_users_order_is_404(auth_headers: dict[str, str]) -> None:
+    order = make_order(User.objects.create_user(username="bob", password="pass1234"))
+
+    assert client.post(f"/orders/{order.id}/cancel", headers=auth_headers).status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_double_cancel_at_the_same_time() -> None:
+    headers = login("alice")
+    order = make_order(User.objects.get(username="alice"))
+
+    statuses = post_at_the_same_time(f"/orders/{order.id}/cancel", [headers, headers])
+
+    assert sorted(statuses) == [200, 409]
+    assert stock() == 5  # 在庫は1回だけ戻る
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過）
+
+`select_for_update()` を外して `Order.objects.get(...)` にすると、同時のテストが10回とも落ちます（2回とも取り消せて、在庫が2回戻る）。`self.status` で確かめるだけでは、2つのリクエストがどちらも「確定」を読んでしまうからです。
+
+</details>
+
+#### Lv3 発展 — 商品ごとの売上
+
+**課題**: スタッフ用の `GET /api/orders/sales` を作る。**完了した注文だけ**を数え、商品ごとに「売れた個数」と「売上金額（買った時点の価格 × 個数 の合計）」を、売上の多い順に返す。
+
+**ヒント**:
+- 集計は明細（`OrderItem`）から始める。注文の状態は `order__status` でたどれる
+- 3-7 の `annotate()` は「行ごとに」付け足した。「商品ごとに」まとめるには、先に `values()` でまとめる単位を決める
+- 合計は `Sum`。「価格 × 個数」は、`F()` 同士の掛け算を `Sum` に渡せる
+- 付け足す名前に、モデルの項目と同じ名前（`quantity`）を使うと、どうなる？
+
+**判定基準**:
+- 完了2件・確定1件の注文があるとき、完了した2件ぶんだけが集計される
+- 値上げの前後で買った明細は、それぞれ買った時点の価格で足される
+- お客は 403
+- 下の解答例のテストが通る
+
+<details><summary>解答例</summary>
+
+`shop/api.py`（import の `Prefetch` の後ろに `Sum` を足し、ファイルの最後に追加）
+
+```diff
+-from django.db.models import Avg, Count, F, Prefetch
++from django.db.models import Avg, Count, F, Prefetch, Sum
+```
+
+```python
+class SalesOut(Schema):
+    product_id: int
+    name: str
+    sold: int  # 売れた個数
+    amount: Decimal  # 売上金額（買った時点の価格 × 個数 の合計）
+
+
+@order_router.get("/sales", response=list[SalesOut], auth=JWTAuth())
+def sales(request: HttpRequest):
+    if not request.user.is_staff:
+        raise HttpError(403, "お店の人しか見られません")
+    return (
+        OrderItem.objects.filter(order__status=Order.Status.COMPLETED)  # 完了した注文だけ
+        .values("product_id", name=F("product__name"))  # 商品ごとにまとめる
+        # 付け足す名前を quantity にすると、明細の項目 quantity とぶつかる
+        .annotate(sold=Sum("quantity"), amount=Sum(F("price") * F("quantity")))
+        .order_by("-amount")  # よく売れた順
+    )
+```
+
+`tests/test_homework_p3_lv3.py`（新規）
+
+```python
+from decimal import Decimal
+
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Order, OrderItem, Product
+from tests.test_order_status import staff_headers  # noqa: F401
+
+client = TestClient(api)
+
+
+def test_sales_by_product(user: User, staff_headers: dict[str, str]) -> None:  # noqa: F811
+    category = Category.objects.create(name="本")
+    book = Product.objects.create(name="Django 入門", price=Decimal("3000"), category=category)
+    note = Product.objects.create(name="Python ノート", price=Decimal("500"), category=category)
+    for status, items in [
+        (Order.Status.COMPLETED, [(book, Decimal("2980"), 1), (note, Decimal("500"), 2)]),
+        (Order.Status.COMPLETED, [(book, Decimal("3000"), 2)]),  # 値上げ後に買った
+        (Order.Status.PLACED, [(book, Decimal("3000"), 5)]),  # まだ完了していない
+    ]:
+        order = Order.objects.create(user=user, total=Decimal("0"), status=status)
+        for product, price, quantity in items:
+            OrderItem.objects.create(order=order, product=product, price=price, quantity=quantity)
+
+    body = client.get("/orders/sales", headers=staff_headers).json()
+
+    assert body == [
+        {"product_id": book.id, "name": "Django 入門", "sold": 3, "amount": "8980.00"},
+        {"product_id": note.id, "name": "Python ノート", "sold": 2, "amount": "1000.00"},
+    ]
+
+
+def test_sales_is_for_staff(auth_headers: dict[str, str]) -> None:
+    assert client.get("/orders/sales", headers=auth_headers).status_code == 403
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（Lv1〜Lv3 を全部入れて `67 passed`。ruff・mypy も通過）
+
+```sql
+SELECT `shop_orderitem`.`product_id` AS `product_id`, `shop_product`.`name` AS `name`,
+       SUM(`shop_orderitem`.`quantity`) AS `sold`,
+       SUM((`shop_orderitem`.`price` * `shop_orderitem`.`quantity`)) AS `amount`
+FROM `shop_orderitem`
+INNER JOIN `shop_order` ON (`shop_orderitem`.`order_id` = `shop_order`.`id`)
+INNER JOIN `shop_product` ON (`shop_orderitem`.`product_id` = `shop_product`.`id`)
+WHERE `shop_order`.`status` = 'completed'
+GROUP BY 1, 2 ORDER BY 4 DESC;
+```
+
+✅ 検証済み: MySQL 8.4.11（`CaptureQueriesContext` で取得）
+
+`sold` を `quantity` という名前にすると、`F("quantity")` が明細の項目ではなく、いま付け足した合計を指してしまいます。`FieldError: Cannot compute Sum(...): ... is an aggregate` で止まります（検証済み）。
+
+根拠: https://docs.djangoproject.com/en/5.2/topics/db/aggregation/#values
+
+</details>
+
+### 3. 第3部の終わりに
+
+**ここまでで、できるようになったこと**
+- お金は `DecimalField`、「0以上」「1つだけ」はチェック制約と一意制約で、DB に守らせる設計ができる
+- いくつもの書き込みを `transaction.atomic` で1かたまりにし、失敗したら全部取り消せる
+- 「同時に来たら？」を実際に起こし、`F()` と `select_for_update()` で直し、`transaction=True` のテストで固定できる
+- 業務ルールをモデルのメソッドに置き、`TextChoices` で状態を管理できる
+- `annotate()` で集計し、`Prefetch` と `explain()` で SQL の本数と中身を点検できる
+
+**ここで止めても成果物になります。** 手元には、ブログ API に加えて「カート・注文・在庫・レビューの付いた EC 風の API」があり、同時に注文されても壊れないことがテストで確かめられています。
+
+**第4部で増えるもの**
+- React（Vite）の画面から、この API を呼ぶ（CORS の設定）
+- Ninja の OpenAPI から、TypeScript の型を作る
+- ログイン・一覧・カートと注文の画面（3〜4画面）
+
+第4部に進むかどうかは、ここで決めてください。
+分からないまま残った箇所は、`# TODO: わからん` の印だけ見返せば十分です。
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第4部 ステップ1` — CORS ／ または `MP: url-shortening-service`
