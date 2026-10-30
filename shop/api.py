@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
+from django.core.mail import send_mail
 from django.db import transaction
 from django.db.models import Avg, Count, F
 from django.http import HttpRequest
@@ -146,6 +147,19 @@ def place_order(request: HttpRequest):
 
         total = sum((ci.product.price * ci.quantity for ci in cart_items), Decimal("0"))
         order = Order.objects.create(user=request.user, total=total)
+
+        email = request.user.email
+        if email:
+            # 確認メールは、注文が確定（COMMIT）したあとに送る。取り消されたら送らない
+            transaction.on_commit(
+                lambda: send_mail(
+                    subject=f"注文 {order.id} を受け付けました",
+                    message=f"合計 {total} 円",
+                    from_email=None,
+                    recipient_list=[email],
+                )
+            )
+
         # 注文の明細を、INSERT 1本でまとめて作る
         OrderItem.objects.bulk_create(
             [
