@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.core.mail import send_mail
 from django.db import transaction
-from django.db.models import Avg, Count, F
+from django.db.models import Avg, Count, F, Prefetch
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema, Status
@@ -124,6 +124,7 @@ class OrderItemOut(Schema):
     product_id: int
     price: Decimal  # 買った時点の価格
     quantity: int
+    name: str = Field(alias="product.name")  # 商品名（明細 → 商品とたどる）
 
 
 class OrderOut(Schema):
@@ -181,6 +182,17 @@ def place_order(request: HttpRequest):
         cart.items.all().delete()  # カートを空にする
 
     return Status(201, order)
+
+
+@order_router.get("", response=list[OrderOut], auth=JWTAuth())
+def list_orders(request: HttpRequest):
+    assert request.user.is_authenticated
+    return (
+        Order.objects.filter(user=request.user)
+        # 明細はまとめて1本で取る。そのとき、明細の商品も JOIN で一緒に取る
+        .prefetch_related(Prefetch("items", queryset=OrderItem.objects.select_related("product")))
+        .order_by("-created_at", "-id")  # 新しい注文から
+    )
 
 
 class OrderStatusIn(Schema):
