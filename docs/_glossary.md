@@ -117,3 +117,6 @@
 | `transaction=True` | pytest.mark.django_db(transaction=True)（TransactionTestCase と同じ動き） | テストを1つのトランザクションで包まず、書き込みを本当に確定させる。テストのあとで全部の台帳を空にするので遅い | 第3部-8 |
 | `on_commit()` | django.db.transaction.on_commit | 「確定したらこれをやって」という予約。取り消されたら予約ごと捨てられる。メールや外部への通知に使う | 第3部-8 |
 | セーブポイント | savepoint | トランザクションの中に挟む「しおり」。`atomic` を入れ子にすると、内側はここまでの取り消しになる | 第3部-8 |
+| `Prefetch` | django.db.models.Prefetch | `prefetch_related` の取り方を細かく指定する札。`queryset=` に `select_related` などを足して、入れ子の関連も少ない SQL で取れる | 第3部-9 |
+| 実行計画 / `explain()` | execution plan / QuerySet.explain() | MySQL が SQL をどう探すかの段取り。`explain()` で見られる。下（字下げの深いほう）から読む | 第3部-9 |
+| 索引（インデックス） | index | 「この値の行はここ」とすぐ引くために、MySQL が別に持つ表。`ForeignKey` には Django が自動で付ける。無い項目で絞ると `Table scan`（全部読む） | 第3部-9 |

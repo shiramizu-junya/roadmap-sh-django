@@ -2546,3 +2546,255 @@ def test_no_mail_when_rolled_back(mailoutbox) -> None:
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第3部 ステップ9` — クエリの総点検
+
+
+---
+
+## 第3部-9: クエリの総点検
+
+**❓ この回の問い**: 3-8 までで、注文は壊れずに確定できるようになった。最後に、「自分の注文履歴」を返す API を作る。注文 → 明細 → 商品と2段たどる一覧だと、SQL は何本になる？ そして、その SQL を MySQL はどう実行している？
+
+**作るもの**: `GET /api/orders`（自分の注文履歴。明細に商品名つき）。SQL を3本に固定し、実行計画を読む
+**重要度**: 🟡 読めればよい — 毎回は書かない。でも、一覧が遅いと言われたとき最初に見る場所
+**前ステップとの接続**: 2-4 の `prefetch_related` を、入れ子（明細の中の商品）まで広げる
+
+### 9-0. このステップの初出
+
+**Django / Ninja**: `Prefetch` オブジェクト, `explain()` / **Python**: なし
+
+> 🧒 **かみくだくと**: **Prefetch** は、`prefetch_related` の「取り方」を細かく指定する札。`Prefetch("items", queryset=...)` と書くと、明細を取る SQL に、さらに `select_related` などを足せる。
+
+> 🧒 **かみくだくと**: **実行計画**（execution plan）は、MySQL が「この SQL をどう探すか」の段取り。`explain()` は、それを見せてもらう命令（SQL の `EXPLAIN`）。索引を使うのか、台帳を頭から全部読むのかが分かる。
+
+> 🧒 **かみくだくと**: **索引**（index）は、本の巻末の索引と同じ。「`user_id` が 1 の行はここ」とすぐ引けるように、MySQL が別に持っている表。
+
+### 9-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① 注文履歴の API**（`shop/api.py`）
+
+import を1か所直す
+
+```diff
+-from django.db.models import Avg, Count, F
++from django.db.models import Avg, Count, F, Prefetch
+```
+
+`OrderItemOut` に1行足す（`product_id` の下）
+
+```python
+    name: str = Field(alias="product.name")  # 商品名（明細 → 商品とたどる）
+```
+
+`class OrderStatusIn` のすぐ上に追加
+
+```python
+@order_router.get("", response=list[OrderOut], auth=JWTAuth())
+def list_orders(request: HttpRequest):
+    assert request.user.is_authenticated
+    return (
+        Order.objects.filter(user=request.user)
+        # 明細はまとめて1本で取る。そのとき、明細の商品も JOIN で一緒に取る
+        .prefetch_related(Prefetch("items", queryset=OrderItem.objects.select_related("product")))
+        .order_by("-created_at", "-id")  # 新しい注文から
+    )
+```
+
+✅ 検証済み: django-ninja 1.7.1（ruff・mypy も通過）
+
+**② SQL の本数を比べる**（注文3件 × 明細2行。`CaptureQueriesContext` で数えた）
+
+| 書き方 | SQL の本数 | 内訳 |
+| --- | --- | --- |
+| 何も付けない | **10** | 注文1 + 明細3（注文ごと） + 商品6（明細ごと） |
+| `.prefetch_related("items")` | **8** | 注文1 + 明細1 + 商品6（明細ごと） |
+| `Prefetch("items", queryset=...select_related("product"))` | **2** | 注文1 + 明細と商品1 |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+2-4 の `prefetch_related("tags")` だけでは、**明細の先の商品**が、明細1行ごとに1本ずつ取りに行かれます。`Prefetch` で、明細を取る SQL に `select_related("product")` を入れて、2本にまとめました。
+
+```sql
+SELECT ... FROM `shop_order` WHERE `shop_order`.`user_id` = 1
+  ORDER BY `shop_order`.`created_at` DESC, `shop_order`.`id` DESC;
+SELECT `shop_orderitem`.`id`, ..., `shop_product`.`id`, `shop_product`.`name`, ...
+  FROM `shop_orderitem` INNER JOIN `shop_product` ON (`shop_orderitem`.`product_id` = `shop_product`.`id`)
+  WHERE `shop_orderitem`.`order_id` IN (3, 2, 1);
+```
+
+✅ 検証済み: MySQL 8.4.11（列の一部を `...` に省略）
+
+API として叩くと、これに身分証の確認（ユーザーの SELECT）1本が足されて、**3本**です。
+
+**③ 実行計画を見る**
+
+```bash
+uv run python manage.py shell -c "
+from shop.models import Order
+print(Order.objects.filter(user_id=1).order_by('-created_at', '-id').explain())
+print(Order.objects.filter(total=2980).explain())
+"
+```
+
+```text
+-> Sort: shop_order.created_at DESC, shop_order.id DESC  (cost=1.1 rows=1)
+    -> Index lookup on shop_order using shop_order_user_id_00aba627_fk_accounts_user_id (user_id=1)  (cost=1.1 rows=1)
+
+-> Filter: (shop_order.total = 2980.00)  (cost=1.1 rows=1)
+    -> Table scan on shop_order  (cost=1.1 rows=1)
+```
+
+✅ 検証済み: MySQL 8.4.11（`cost` と `rows` は、台帳の行数で変わる。形は同じ）
+
+読み方は、**下（字下げの深いほう）から上**です。
+
+- 1つ目: `user_id` の**索引**で自分の注文だけを引き（`Index lookup`）、それを並べ替えている（`Sort`）
+- 2つ目: `total` には索引が無いので、台帳を**頭から全部**読んで（`Table scan`）、合うものを残している（`Filter`）
+
+`user_id` の索引は、自分で作っていません。Django は `ForeignKey` に、自動で索引を付けます。
+
+**④ テスト**（`tests/test_order_history.py` 新規）
+
+要件だけ書きます。
+
+1. alice の注文2件と bob の注文1件がある。alice が `GET /orders` すると2件で、新しい順。明細に商品名が入っている
+2. 注文が1件でも5件でも、SQL は3本（2-4 の `django_assert_num_queries` と `parametrize` を使う）
+
+<details><summary>解答例</summary>
+
+```python
+from decimal import Decimal
+
+import pytest
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Order, OrderItem, Product
+
+client = TestClient(api)
+
+
+def make_orders(user: User, n: int) -> None:
+    # 商品2つを1個ずつ買った注文を、n 件作る
+    category = Category.objects.create(name=f"本{n}")
+    books = [
+        Product.objects.create(name=f"本{i}", price=Decimal("100"), category=category)
+        for i in range(2)
+    ]
+    for _ in range(n):
+        order = Order.objects.create(user=user, total=Decimal("200"))
+        for book in books:
+            OrderItem.objects.create(order=order, product=book, price=book.price, quantity=1)
+
+
+def test_only_my_orders_newest_first(user: User, auth_headers: dict[str, str]) -> None:
+    make_orders(user, 2)
+    make_orders(User.objects.create_user(username="bob", password="pass1234"), 1)
+
+    body = client.get("/orders", headers=auth_headers).json()
+
+    assert len(body) == 2  # bob の注文は入らない
+    assert body[0]["id"] > body[1]["id"]  # 新しい注文が先
+    assert [item["name"] for item in body[0]["items"]] == ["本0", "本1"]
+
+
+@pytest.mark.parametrize("n_orders", [1, 5])
+def test_query_count_does_not_grow(
+    n_orders: int, user: User, auth_headers: dict[str, str], django_assert_num_queries
+) -> None:
+    make_orders(user, n_orders)
+
+    # 身分証の確認1本 + 注文1本 + 明細と商品1本。注文が何件でも3本
+    with django_assert_num_queries(3):
+        client.get("/orders", headers=auth_headers)
+```
+
+</details>
+
+✅ 検証済み: pytest-django 4.14.0（`62 passed`。3-8 のテストを4件とも書いた場合。ruff・mypy も通過）
+
+`Prefetch(...)` を `"items"` だけに戻すと、`Expected to perform 3 queries but 5 were done` で落ちます（注文1件・明細2行のとき。検証済み）。
+
+### 9-2. 🔬 仕組み解剖
+
+| | `Prefetch` | `explain()` |
+| --- | --- | --- |
+| 正式名称 | django.db.models.Prefetch（Prefetch objects） | QuerySet.explain() |
+| いつ・誰が | 一覧を評価したときに、Django が明細の SQL を1本（`order_id IN (...)`）送る。`queryset=` に書いた `select_related` が、その SQL の JOIN になる。受け取った明細を、Python が注文ごとに振り分ける | 呼んだときに Django が `EXPLAIN FORMAT=TREE SELECT ...` を送り、MySQL の段取りを文字列で返す。SQL 自体は実行しない |
+| 発行される SQL | ②の2本目（`INNER JOIN shop_product ... WHERE order_id IN (3, 2, 1)`） | `EXPLAIN FORMAT=TREE SELECT ...` |
+| TS での対応物 | Prisma の `include: { items: { include: { product: true } } }` が近い | 対応物なし（DB の機能）。Prisma にも無く、生 SQL で `EXPLAIN` を書く |
+| なぜこの設計 | 「何を先に取るか」と「その取り方」を分けて書ける。並べ替えや絞り込みも `queryset=` に足せる | 「遅い」の理由は、SQL の本数か、1本の中身（索引を使っているか）のどちらか。本数は②、中身は③で見る |
+| 失敗すると | `Prefetch` の `queryset=` に**別のモデル**（たとえば `Product.objects.all()`）を渡すと、`FieldError: Cannot resolve keyword 'order' into field.`（確認済み） | 索引が無い項目で絞ると `Table scan`。行が少ないうちは速いので、件数が増えてから遅くなる |
+
+✅ 検証済み: Django 5.2.17 / MySQL 8.4.11
+
+```text
+  SQL 1: shop_order WHERE user_id = 1          -> orders 3, 2, 1
+  SQL 2: shop_orderitem JOIN shop_product
+         WHERE order_id IN (3, 2, 1)           -> 6 items (with product)
+  Python: put each item under its order        -> order.items
+```
+
+✅ 検証済み: ②の SQL
+
+見てほしいのは、SQL 2 の `IN (3, 2, 1)` です。SQL 1 で取った注文の id を、Django がまとめて渡しています。
+
+### 9-3. 🐍 Python注
+
+新しい文法はありません。
+
+### 9-4. 解説 — なぜこう設計するか
+
+一覧の API は、件数が増えたときに遅くなります。点検は2段です。まず**本数**（②。件数で増えていないか）、次に**1本の中身**（③。索引を使っているか）。本数はテストで固定しておけば、あとで誰かが項目を足して N+1 を作っても、テストが気づきます。
+
+🧠 Django の考え方: SQL は Django が書いてくれる。でも、何本・どう実行されるかは、自分で見て確かめる。
+
+### 9-5. 🏢 実務メモ
+
+> 🏢 **実務メモ**: 公式ドキュメントの「データベースアクセスの最適化」は、まず索引など DB の基本の最適化を挙げ、`explain()` で SQL がどう実行されるかを確かめるよう勧めている。
+> 根拠: https://docs.djangoproject.com/en/5.2/topics/db/optimization/#use-standard-db-optimization-techniques
+
+### 9-6. 🔮 予測 → 動作確認
+
+1. ②で、`Prefetch` をやめて `.prefetch_related("items__product")` と書いたら、SQL は何本？
+2. `ForeignKey` を足しただけなのに、`user_id` に索引があった。誰が作った？
+3. `place_order`（POST）の応答にも `name` が入るようになった。ここでの SQL は増えた？
+
+<details><summary>答え</summary>
+
+1. 3本（注文1 + 明細1 + 商品1。検証済み）。`__` でたどると、商品も `IN (...)` で別の1本になる。`Prefetch` + `select_related` なら JOIN で2本。どちらも件数で増えない
+2. Django。`ForeignKey` には、自動で索引が付く（`db_index` の既定が `True`）
+   根拠: https://docs.djangoproject.com/en/5.2/ref/models/fields/#foreignkey
+3. 増えた。明細2行の注文で、11本 → 13本（明細ごとに商品を1本ずつ。検証済み）。注文1回の中の数本なので、ここでは直さない。直すなら、返す前に `Prefetch` 付きで取り直す
+
+</details>
+
+### 9-7. ✅ 想起チェック
+
+1. `prefetch_related("items")` だけでは足りなかったのはなぜ？
+2. `explain()` の結果に `Table scan` と出たら、何が起きている？
+
+<details><summary>答え</summary>
+
+1. 明細はまとめて取れたが、明細の先の商品を、明細1行ごとに取りに行っていたから
+2. 索引を使わずに、台帳を頭から全部読んでいる。行が増えるほど遅くなる
+
+</details>
+
+### 9-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **一覧の点検は2段。SQL の本数は `Prefetch` とテストで固定し、1本の中身は `explain()` で見る。**
+
+📒 用語集に追記: `Prefetch` / 実行計画・`explain()` / 索引（インデックス）
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+これで第3部の本編は終わりです。分からなかった箇所は `# TODO: わからん` を残して、先に進んで大丈夫です。
+
+▶ **次**: `M2: 第3部` — 白紙再現と宿題
