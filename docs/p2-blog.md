@@ -2634,18 +2634,21 @@ browser: GET /media/posts/red.png --> static() reads the file on disk
 ✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
 変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
 
-**⓪ 検索の材料を入れる**（写経しなくてよい。`scripts/seed_search.py` は用意済み）
+**⓪ 検索の材料を入れる**（写経しなくてよい。`scripts/seed.py` は用意済み）
 
 検索は、記事が多くないと試せません。カテゴリ「プログラミング」「生活」「旅行」に記事を15件入れます。同じタイトルの記事は作らないので、何回流しても増えません。
 
 ```bash
-SQL_LOG=0 uv run python manage.py shell < scripts/seed_search.py
+SQL_LOG=0 uv run python manage.py shell < scripts/seed.py
 ```
 
 ```text
 記事を 15 件作りました（全部で 19 件）
+...
 カテゴリの id: {'プログラミング': 2, '旅行': 3, '生活': 1}
 ```
+
+> 📝 `scripts/seed.py` は、第3部の商品・レビュー・注文もまとめて入れる（`...` の行）。そのため、第3部のマイグレーションまで済んでいないと動かない。それより前の段階で試すなら、記事だけを入れていた当時のスクリプトを `git show 80aa59e:scripts/seed_search.py > /tmp/seed_search.py` で取り出して流す。
 
 ✅ 検証済み: 2回目は「0 件作りました」。カテゴリの id は環境で変わるので、出てきた id を②で使う
 
