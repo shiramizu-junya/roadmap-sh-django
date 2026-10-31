@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "corsheaders",  # 追加: 別のオリジン（React の開発サーバ）からの呼び出しを許す
     "accounts",  # 追加: accounts アプリを登録する
     "blog",  # 追加: blog アプリを登録する
     "shop",  # 追加: shop アプリを登録する
@@ -52,6 +53,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "config.middleware.timing_middleware",  # 追加: 一番外側で全体の時間を測る
+    "corsheaders.middleware.CorsMiddleware",  # 追加: 応答を作る CommonMiddleware より前に置く
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -169,3 +171,6 @@ LOGGING = {
 
 # メールは送らずに、runserver の画面（コンソール）に出す
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# 呼び出しを許すオリジン（React の開発サーバ）。ここに無いオリジンからは、ブラウザが応答を読ませない
+CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
