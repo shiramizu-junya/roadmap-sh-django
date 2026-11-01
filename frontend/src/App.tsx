@@ -1,12 +1,8 @@
+import type { components } from "./api/schema";
 import { useEffect, useState } from "react";
 
-// 1件の商品（4-2 で、Ninja の OpenAPI から自動で作る型に置き換える）
-type Product = {
-    id: number;
-    name: string;
-    price: string;
-    stock: number;
-};
+// 1件の商品。Ninja の ProductOut から自動で作った型を使う
+type Product = components["schemas"]["ProductOut"];
 
 const API_URL = "http://127.0.0.1:8000/api";
 
@@ -29,6 +25,9 @@ function App() {
                 {products.map((p) => (
                     <li key={p.id}>
                         {p.name} — {p.price} 円（在庫 {p.stock}）
+                        {p.rating_avg === null
+                            ? " レビューなし"
+                            : ` ★${p.rating_avg.toFixed(1)}（${p.review_count}件）`}
                     </li>
                 ))}
             </ul>
