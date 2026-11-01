@@ -919,3 +919,442 @@ API を呼ぶ処理を `client.ts` にまとめたのは、⑤のように**全�
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第4部 ステップ4` — ログイン画面
+
+
+---
+
+## 第4部-4: ログイン画面
+
+**❓ この回の問い**: 2-6 で、ログインすると身分証（access、5分）と引換券（refresh、1日）が返るようにした。画面からログインして、注文履歴のような「本人だけが見られる API」を呼ぶ。5分たって身分証が切れたら、利用者にもう一度パスワードを打たせる？
+
+**作るもの**: ログイン画面と注文履歴の画面。身分証が切れたら、引換券で新しい身分証をもらい、自動でやり直す
+**重要度**: 🔴 毎日使う — JWT を使う画面なら、必ずこの「切れたら更新」を書く
+**前ステップとの接続**: 2-6 の `/auth/login`・`/auth/refresh`、3-9 の `GET /api/orders` を画面から呼ぶ。4-3 の `client.ts` に足す。4-1 の「⏭️ プリフライト」をここで回収する
+
+### 4-0. このステップの初出
+
+**Django / Ninja**: なし（2-6 の JWT を使い回す） / **Python**: なし
+
+> 🧒 **かみくだくと**: **localStorage** は、ブラウザがサイト（オリジン）ごとに持つ、小さな保存場所。ページを閉じても残る。ここに身分証と引換券を入れておく。
+
+### 4-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① `client.ts` に、ログインと「身分証付きの GET」を足す**
+
+`frontend/src/api/client.ts` の先頭に追加
+
+```ts
+import type { components } from './schema'
+
+type TokenOut = components['schemas']['TokenOut']
+```
+
+ファイルの最後に追加
+
+```ts
+// ログインして、身分証（access）と引換券（refresh）をブラウザに保存する
+export async function login(username: string, password: string): Promise<void> {
+  const res = await fetch(`${API_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`)
+  }
+  const tokens = (await res.json()) as TokenOut
+  localStorage.setItem('access', tokens.access)
+  localStorage.setItem('refresh', tokens.refresh)
+}
+
+// ログアウト。保存した身分証と引換券を消す
+export function logout(): void {
+  localStorage.removeItem('access')
+  localStorage.removeItem('refresh')
+}
+
+// 身分証を Authorization ヘッダに付けて GET する
+function fetchWithAccess(path: string): Promise<Response> {
+  return fetch(`${API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${localStorage.getItem('access')}` },
+  })
+}
+
+// ログインが要る API を GET して、返ってきた JSON を T 型として返す
+export async function getJsonWithAuth<T>(path: string): Promise<T> {
+  const res = await fetchWithAccess(path)
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as T
+}
+```
+
+`TokenOut` は、4-2 で作った `schema.d.ts` にある、Django の `TokenOut`（`access` と `refresh`）の型です。
+
+**② 画面を2つ足す**
+
+`frontend/src/pages/Login.tsx` を新規作成
+
+```tsx
+import { useState } from 'react'
+import type { SubmitEvent } from 'react'
+import { useNavigate } from 'react-router'
+import { login } from '../api/client'
+
+function Login() {
+  const navigate = useNavigate()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+
+  function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
+    e.preventDefault() // フォームの既定の送信（ページの読み込み直し）を止める
+    login(username, password)
+      .then(() => navigate('/orders')) // ログインできたら注文履歴へ
+      .catch((e: unknown) => setError(String(e)))
+  }
+
+  return (
+    <main>
+      <h1>ログイン</h1>
+      {error && <p>ログインできませんでした: {error}</p>}
+      <form onSubmit={handleSubmit}>
+        <p>
+          <label>
+            ユーザー名 <input value={username} onChange={(e) => setUsername(e.target.value)} />
+          </label>
+        </p>
+        <p>
+          <label>
+            パスワード{' '}
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
+        </p>
+        <button type="submit">ログイン</button>
+      </form>
+    </main>
+  )
+}
+
+export default Login
+```
+
+`frontend/src/pages/OrderList.tsx` を新規作成
+
+```tsx
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router'
+import { getJsonWithAuth, logout } from '../api/client'
+import type { components } from '../api/schema'
+
+type Order = components['schemas']['OrderOut']
+
+// 注文の状態の、画面に出す名前。Status の3つのどれかが抜けると、型のエラーになる
+const STATUS_LABEL: Record<components['schemas']['Status'], string> = {
+  placed: '確定',
+  shipped: '発送済み',
+  completed: '完了',
+}
+
+function OrderList() {
+  const navigate = useNavigate()
+  const [orders, setOrders] = useState<Order[] | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    getJsonWithAuth<Order[]>('/orders')
+      .then((data) => setOrders(data))
+      .catch((e: unknown) => setError(String(e)))
+  }, [])
+
+  function handleLogout() {
+    logout()
+    navigate('/login')
+  }
+
+  if (error) {
+    return (
+      <main>
+        <p>読み込めませんでした: {error}</p>
+        <p>
+          <Link to="/login">ログインする</Link>
+        </p>
+      </main>
+    )
+  }
+  if (orders === null) return <p>読み込み中…</p>
+
+  return (
+    <main>
+      <h1>注文履歴</h1>
+      <button onClick={handleLogout}>ログアウト</button>
+      <ul>
+        {orders.map((order) => (
+          <li key={order.id}>
+            注文 {order.id}（{STATUS_LABEL[order.status]}）— 合計 {order.total} 円
+            <ul>
+              {order.items.map((item) => (
+                <li key={item.product_id}>
+                  {item.name} × {item.quantity}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+
+export default OrderList
+```
+
+`frontend/src/App.tsx` を、全文置き換える
+
+```tsx
+import { BrowserRouter, Link, Route, Routes } from 'react-router'
+import Login from './pages/Login'
+import OrderList from './pages/OrderList'
+import PostDetail from './pages/PostDetail'
+import PostList from './pages/PostList'
+import ProductList from './pages/ProductList'
+
+function App() {
+  return (
+    <BrowserRouter>
+      <nav>
+        <Link to="/">記事</Link> | <Link to="/products">商品</Link> |{' '}
+        <Link to="/orders">注文履歴</Link> | <Link to="/login">ログイン</Link>
+      </nav>
+      <Routes>
+        <Route path="/" element={<PostList />} />
+        <Route path="/posts/:postId" element={<PostDetail />} />
+        <Route path="/products" element={<ProductList />} />
+        <Route path="/orders" element={<OrderList />} />
+        <Route path="/login" element={<Login />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default App
+```
+
+✅ 検証済み: react-router 8.4.0 / TypeScript 7.0.2 / @types/react 19.3.0（`npm run build`・`npm run lint` も通過）
+
+`FormEvent` ではなく `SubmitEvent` を使っています。今の React の型では、`FormEvent` は「実在しない」として非推奨（`@deprecated`）になっているためです。
+
+**③ ログインしてみる**
+
+「ログイン」を開き、`scripts/seed.py` で作った carol（パスワード `pass1234`）で入ります。注文履歴に移って、carol の注文が新しい順に出ます。
+
+```text
+記事 | 商品 | 注文履歴 | ログイン
+注文履歴
+[ログアウト]
+・注文 3（確定）— 合計 7180.00 円
+    ・USB-C 充電器 65W × 1
+    ・SQL 図鑑 × 1
+・注文 2（発送済み）— 合計 1650.00 円
+    ・ステンレスマグカップ × 1
+・注文 1（完了）— 合計 4036.00 円
+    ・Django 入門 × 1
+    ・冒険マンガ 1巻 × 2
+```
+
+✅ 検証済み: Chromium（Playwright）で表示（注文の id は環境で変わる）。パスワードを間違えると「ログインできませんでした: Error: 401 Unauthorized」
+
+Django のログを見ると、4-1 で予告した**プリフライト**が出ています。
+
+```text
+"OPTIONS /api/auth/login HTTP/1.1" 200 0
+"POST /api/auth/login HTTP/1.1" 200 486
+"OPTIONS /api/orders HTTP/1.1" 200 0
+"OPTIONS /api/orders HTTP/1.1" 200 0
+"GET /api/orders HTTP/1.1" 200 808
+"GET /api/orders HTTP/1.1" 200 808
+```
+
+✅ 検証済み: runserver のログ（2本ずつなのは `StrictMode` のため。4-1 の🔮）
+
+ログインの POST は `Content-Type: application/json`、注文履歴の GET は `Authorization` ヘッダ付きです。どちらも「そのまま送ってよい簡単な呼び出し」に入らないので、ブラウザが先に `OPTIONS` で尋ねています。4-1 で入れた django-cors-headers が、これに 200 で答えています。
+
+**④ 壊れるのを見る**
+
+ログインしたまま **5分待って**、注文履歴を再読み込みします（待つ代わりに、開発者ツールの「Application」→「Local Storage」で `access` の値を1文字書き換えても、同じことが起きます）。
+
+```text
+読み込めませんでした: Error: 401 Unauthorized
+ログインする
+```
+
+✅ 検証済み: スクラッチだけ身分証の期限を20秒に縮め、期限切れで 401 になるのを確認（教材のアプリの設定は変えていない）
+
+引換券はまだ1日有効なのに、身分証が切れただけで、利用者は追い出されました。5分ごとにパスワードを打たせるのは、使い物になりません。
+
+**⑤ 直す: 切れたら、引換券で取り替えて1回だけやり直す**
+
+`client.ts` の `type TokenOut = ...` の下に1行
+
+```ts
+type AccessOut = components['schemas']['AccessOut']
+```
+
+`// ログインが要る API を GET して ...` の関数の、**すぐ上**に追加
+
+```ts
+// 引換券で、新しい身分証をもらう。引換券が無いか切れていたら、ログアウトして false
+async function refreshAccess(): Promise<boolean> {
+  const refresh = localStorage.getItem('refresh')
+  if (refresh === null) {
+    return false
+  }
+  const res = await fetch(`${API_URL}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh }),
+  })
+  if (!res.ok) {
+    logout()
+    return false
+  }
+  const data = (await res.json()) as AccessOut
+  localStorage.setItem('access', data.access)
+  return true
+}
+```
+
+`getJsonWithAuth` を、次のものに置き換える
+
+```ts
+// ログインが要る API を GET して、返ってきた JSON を T 型として返す
+export async function getJsonWithAuth<T>(path: string): Promise<T> {
+  let res = await fetchWithAccess(path)
+  if (res.status === 401 && (await refreshAccess())) {
+    // 身分証が切れていた。新しい身分証で、1回だけやり直す
+    res = await fetchWithAccess(path)
+  }
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as T
+}
+```
+
+✅ 検証済み: `npm run build`・`npm run lint` が通る
+
+もう一度④と同じことをすると、今度は注文履歴がそのまま出ます。Django のログでは、こう流れています。
+
+```text
+"GET /api/orders HTTP/1.1" 401 427
+"OPTIONS /api/auth/refresh HTTP/1.1" 200 0
+"POST /api/auth/refresh HTTP/1.1" 200 242
+"GET /api/orders HTTP/1.1" 200 808
+```
+
+✅ 検証済み: 期限切れ・`access` の書き換えのどちらでも、401 → refresh → やり直しで 200（`StrictMode` で各2本出る。上は1本ずつに省略）
+
+コミットするときは、`src/api/client.ts` と、新しい `pages/Login.tsx`・`pages/OrderList.tsx`、`App.tsx` を入れます。
+
+### 4-2. 🔬 仕組み解剖
+
+| | 身分証の自動更新（`getJsonWithAuth` + `refreshAccess`） |
+| --- | --- |
+| 正式名称 | 対応する Django / Ninja の機能は無い。2-6 の `/auth/refresh`（`RefreshToken(...).access_token`）を、画面の側から呼ぶ仕組み |
+| いつ・誰が | `getJsonWithAuth` が 401 を受け取ったときだけ、`refreshAccess` が `POST /auth/refresh` を呼ぶ。新しい身分証を保存して、元の GET を1回だけやり直す |
+| 発行される SQL | `/auth/refresh` 自体は SQL を出さない（引換券の署名と期限を確かめるだけ）。やり直した `GET /api/orders` は、`JWTAuth` が身分証の持ち主を引く1本と、3-9 の2本で、計3本 |
+| TS での対応物 | axios の interceptor（応答を横取りする仕組み）で書くのが定番。ここでは `fetch` で同じことを手で書いた |
+| なぜこの設計 | 身分証は短く（盗まれても5分で使えなくなる）、引換券は長く（利用者は1日ログインし直さなくてよい）。この2つを両立させるのが「切れたら交換」 |
+| 失敗すると | 引換券も切れていたら（1日たった・書き換えられた）、`/auth/refresh` も 401。`logout()` で両方消し、「ログインする」を出す |
+
+✅ 検証済み: django-ninja-jwt の既定（`ROTATE_REFRESH_TOKENS` は `False`。引換券は交換しても変わらない）
+✅ 検証済み: SQL のログで、`/auth/refresh` は0本、`GET /api/orders` は3本
+根拠: https://eadwincode.github.io/django-ninja-jwt/settings/
+
+```text
+  OrderList → getJsonWithAuth('/orders')
+                │  GET /api/orders  Authorization: Bearer <access>
+                ├─ 200 → そのまま返す
+                └─ 401（身分証が切れた）
+                     └─ refreshAccess()  POST /api/auth/refresh {"refresh": ...}
+                          ├─ 200 → 新しい access を保存 → GET /api/orders をもう1回 → 200
+                          └─ 401（引換券も切れた）→ logout() → 401 のまま投げる → 「ログインする」
+```
+
+✅ 検証済み: ⑤と、引換券を書き換えて `/auth/refresh` が 401 → 保存場所が空になるのを確認
+
+**ブラウザの「下見」（プリフライト）が飛ぶ条件**
+
+ブラウザは、別のオリジンへの呼び出しのうち、`GET`・`POST` などで、ヘッダも `Content-Type` も「フォーム送信と同じくらい」のものだけを、そのまま送ります。`Authorization` を付けたり、`Content-Type: application/json` にしたりすると、先に `OPTIONS` で尋ねます。答え（`access-control-max-age: 86400`、4-1）はしばらく覚えるので、毎回は飛びません。2回目のログインでは `OPTIONS` が出ませんでした。
+根拠: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS#preflighted_requests
+
+### 4-3. 🐍 Python注
+
+新しい文法はありません。
+
+TypeScript の側で1つだけ補足します。`Record<Status, string>` は「`Status` の値（`placed`・`shipped`・`completed`）を全部キーに持つ辞書」の型です。Python の `dict[str, str]` と違い、キーが1つでも欠けるとビルドが止まります（🔮1）。
+
+### 4-4. 解説 — なぜこう設計するか
+
+ログインが要る呼び出しを `getJsonWithAuth` の1か所にしたので、更新の仕組みも1か所に書けば済みました。注文履歴の画面（`OrderList`）は、身分証が切れたことを知りません。4-5 で注文を確定する POST を足すときも、同じ形で包めば、更新は自動で効きます。
+
+やり直しを「1回だけ」にしているのは、更新に失敗し続けたときに、無限に呼び続けないためです。
+
+🧠 Django の考え方: Django の側は、身分証の中身（署名と期限）だけを見て、通すか 401 かを決める。「切れたら更新」は、利用者の手元（画面）の責任。サーバは、ログイン中の人の状態を覚えていない。
+
+### 4-5. ⚠️ アンチパターン ／ 🔓 教材用の簡略化
+
+> ⚠️ **アンチパターン**: 401 が来たら、すぐログイン画面に飛ばす。引換券がまだ使えるのに、利用者に5分ごとにパスワードを打たせることになる（④）。
+
+> 🔓 **教材用の簡略化**: 身分証と引換券を `localStorage` に入れている。
+> **本番では**: `localStorage` は、そのページで動く JavaScript なら何でも読める。悪いスクリプトが入り込む（XSS）と、引換券ごと盗まれる。OWASP は、ログインの状態を表す値を `localStorage` に入れないよう勧めている。本番では、引換券を JavaScript から読めない Cookie（`HttpOnly`）に入れ、身分証はメモリだけに持つ、などの形にする。
+> 根拠: https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage
+
+> 🔓 **教材用の簡略化**: ナビの「ログイン」は、ログイン中も出たまま。ログイン中かどうかを画面全体で共有していない。
+> **本番では**: ログイン中のユーザーを React の Context などで共有し、ナビの表示を切り替える。
+
+### 4-6. 🔮 予測 → 動作確認
+
+1. `OrderList.tsx` の `STATUS_LABEL` から `completed: '完了',` の行を消したら？
+2. ログアウトした状態（保存場所が空）で、注文履歴を開いたら？ `/auth/refresh` は呼ばれる？
+3. ⑤のあと、身分証が切れた状態で注文履歴を開くと、`POST /auth/refresh` は何回飛ぶ？
+
+<details><summary>答え</summary>
+
+1. `npm run build` が止まる。`error TS2741: Property 'completed' is missing in type '{ placed: string; shipped: string; }' but required in type 'Record<"completed" | "placed" | "shipped", string>'.`（検証済み）。Django に状態を足して `npm run gen:api` を流すと、ここで「名前を付け忘れている」と教えてくれる
+2. 「読み込めませんでした: Error: 401 Unauthorized」。`/auth/refresh` は呼ばれない。引換券が無い（`null`）ので、`refreshAccess` は送る前に `false` を返す（検証済み: ログは `GET /api/orders` の 401 だけ）
+3. 2回。`StrictMode` で effect が2回走り、2つの `getJsonWithAuth` がそれぞれ 401 を受けて、それぞれ更新するから（検証済み）。今は引換券が交換で変わらない設定（`ROTATE_REFRESH_TOKENS = False`）なので、2回とも成功する。交換のたびに引換券を変える設定にすると、先に終わった方が古い引換券を無効にし、後の方が失敗することがある。本番では、更新中の Promise を1つにまとめる
+
+</details>
+
+### 4-7. ✅ 想起チェック
+
+1. 身分証（access）と引換券（refresh）、有効期限が長いのはどっち？ なぜ長さを変える？
+2. 401 が返ってきたとき、`getJsonWithAuth` は何をする？
+
+<details><summary>答え</summary>
+
+1. 引換券（1日）。身分証は毎回送るので盗まれやすく、短くしておく（5分）。引換券は更新のときだけ送るので長くでき、利用者は1日ログインし直さなくてよい
+2. 引換券で新しい身分証をもらい、保存して、同じ GET を1回だけやり直す。引換券も切れていたら、両方消して 401 のまま投げる
+
+</details>
+
+### 4-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **401 が来たら、すぐ追い出さずに、引換券（refresh）で身分証（access）を取り替えて1回だけやり直す。それも失敗したら、ログインし直してもらう。**
+
+📒 用語集に追記: localStorage / 身分証の自動更新 / `Record<K, V>`
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第4部 ステップ5` — カートと注文画面

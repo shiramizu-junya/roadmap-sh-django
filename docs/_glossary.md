@@ -132,3 +132,6 @@
 | `useParams` | React Router のフック | URL の `/posts/:postId` の `:postId` の部分を取り出す。値は文字列（`string \| undefined`） | 第4部-3 |
 | `res.ok` | `Response.ok`（Fetch API） | 応答のステータスが 200〜299 なら `true`。`fetch` は 404 や 500 でも失敗にしないので、これを自分で確かめる | 第4部-3 |
 | ジェネリクス | generics（型の引数） | `getJson<Post>(...)` のように、呼ぶ側が型を渡せる仕組み。Python の `def f[T](...) -> T:` と同じ考え方 | 第4部-3 |
+| localStorage | Web Storage API の `localStorage` | ブラウザがオリジンごとに持つ小さな保存場所。ページを閉じても残る。JavaScript から何でも読めるので、本番で身分証を置くのは避ける | 第4部-4 |
+| 身分証の自動更新 | token refresh | 身分証（access）が切れて 401 が来たら、引換券（refresh）で新しい身分証をもらい、同じ呼び出しを1回だけやり直すこと | 第4部-4 |
+| `Record<K, V>` | TypeScript の組み込み型 | `K` の値を全部キーに持つ辞書の型。キーが1つでも欠けるとビルドが止まる | 第4部-4 |
