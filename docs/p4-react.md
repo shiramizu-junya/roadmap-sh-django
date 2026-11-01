@@ -1358,3 +1358,416 @@ TypeScript の側で1つだけ補足します。`Record<Status, string>` は「`
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第4部 ステップ5` — カートと注文画面
+
+
+---
+
+## 第4部-5: カートと注文画面
+
+**❓ この回の問い**: 商品一覧から「カートに入れる」、カートで「注文を確定する」。第3部で作った API は、在庫が足りなければ 409、カートが空なら 400 と、理由付きで断る。その理由は、画面の利用者に届いている？
+
+**作るもの**: 商品一覧の「カートに入れる」ボタン、カートの画面と「注文を確定する」ボタン。断られたときは、Django が返した理由を画面に出す
+**重要度**: 🟡 よく使う — POST する画面では、必ず「断られたときに何と出すか」を決める
+**前ステップとの接続**: 3-2 のカート・3-3 の注文確定・3-5 の行ロックを、画面から呼ぶ。4-4 の `getJsonWithAuth` を POST にも広げる
+
+### 5-0. このステップの初出
+
+**Django / Ninja**: なし / **Python**: なし
+
+新しい道具もありません。4-1〜4-4 で作った部品を組み合わせます。
+
+### 5-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① `client.ts` を、POST も送れるようにする**
+
+`frontend/src/api/client.ts` の `fetchWithAccess` を、次のものに置き換える
+
+```ts
+// 身分証を Authorization ヘッダに付けて呼ぶ。body を渡したら、JSON にして送る
+function fetchWithAccess(path: string, method: string, body?: unknown): Promise<Response> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${localStorage.getItem('access')}`,
+  }
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
+  return fetch(`${API_URL}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+```
+
+`getJsonWithAuth` を、次のものに置き換える（`sendWithAuth` が中身で、`getJsonWithAuth` と `postJsonWithAuth` はその入口）
+
+```ts
+// ログインが要る API を呼んで、返ってきた JSON を T 型として返す
+async function sendWithAuth<T>(path: string, method: string, body?: unknown): Promise<T> {
+  let res = await fetchWithAccess(path, method, body)
+  if (res.status === 401 && (await refreshAccess())) {
+    // 身分証が切れていた。新しい身分証で、1回だけやり直す
+    res = await fetchWithAccess(path, method, body)
+  }
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as T
+}
+
+// ログインが要る API を GET する
+export function getJsonWithAuth<T>(path: string): Promise<T> {
+  return sendWithAuth<T>(path, 'GET')
+}
+
+// ログインが要る API に POST する。body は JSON にして送る
+export function postJsonWithAuth<T>(path: string, body?: unknown): Promise<T> {
+  return sendWithAuth<T>(path, 'POST', body)
+}
+```
+
+身分証の更新（4-4 の `refreshAccess`）は `sendWithAuth` の中にあるので、POST でも自動で効きます。
+
+**② 画面を作る**
+
+`frontend/src/pages/ProductList.tsx` を、全文置き換える
+
+```tsx
+import { useEffect, useState } from 'react'
+import { getJson, postJsonWithAuth } from '../api/client'
+import type { components } from '../api/schema'
+
+// 1件の商品。Ninja の ProductOut から自動で作った型を使う
+type Product = components['schemas']['ProductOut']
+type CartItemOut = components['schemas']['CartItemOut']
+
+function ProductList() {
+  const [products, setProducts] = useState<Product[]>([])
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('') // カートに入れた結果
+
+  useEffect(() => {
+    getJson<Product[]>('/products')
+      .then((data) => setProducts(data))
+      .catch((e: unknown) => setError(String(e)))
+  }, [])
+
+  function handleAdd(product: Product) {
+    postJsonWithAuth<CartItemOut>('/cart/items', { product_id: product.id, quantity: 1 })
+      .then((item) => setMessage(`「${item.name}」をカートに入れました（${item.quantity}個）`))
+      .catch((e: unknown) => setMessage(`カートに入れられませんでした: ${String(e)}`))
+  }
+
+  return (
+    <main>
+      <h1>商品一覧</h1>
+      {error && <p>読み込めませんでした: {error}</p>}
+      {message && <p>{message}</p>}
+      <ul>
+        {products.map((p) => (
+          <li key={p.id}>
+            {p.name} — {p.price} 円（在庫 {p.stock}）
+            {p.rating_avg === null
+              ? ' レビューなし'
+              : ` ★${p.rating_avg.toFixed(1)}（${p.review_count}件）`}{' '}
+            <button disabled={p.stock === 0} onClick={() => handleAdd(p)}>
+              {p.stock === 0 ? '売り切れ' : 'カートに入れる'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+
+export default ProductList
+```
+
+`frontend/src/pages/Cart.tsx` を新規作成
+
+```tsx
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
+import { getJsonWithAuth, postJsonWithAuth } from '../api/client'
+import type { components } from '../api/schema'
+
+type CartOut = components['schemas']['CartOut']
+type OrderOut = components['schemas']['OrderOut']
+
+function Cart() {
+  const navigate = useNavigate()
+  const [cart, setCart] = useState<CartOut | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [orderError, setOrderError] = useState('')
+  const [sending, setSending] = useState(false) // 注文を送っている間は true
+
+  useEffect(() => {
+    getJsonWithAuth<CartOut>('/cart')
+      .then((data) => setCart(data))
+      .catch((e: unknown) => setLoadError(String(e)))
+  }, [])
+
+  function handleOrder() {
+    setSending(true)
+    postJsonWithAuth<OrderOut>('/orders')
+      .then(() => navigate('/orders')) // 確定したら注文履歴へ
+      .catch((e: unknown) => {
+        setOrderError(String(e))
+        setSending(false)
+      })
+  }
+
+  if (loadError) return <p>読み込めませんでした: {loadError}</p>
+  if (cart === null) return <p>読み込み中…</p>
+
+  return (
+    <main>
+      <h1>カート</h1>
+      {orderError && <p>注文できませんでした: {orderError}</p>}
+      {cart.items.length === 0 ? (
+        <p>カートは空です</p>
+      ) : (
+        <>
+          <ul>
+            {cart.items.map((item) => (
+              <li key={item.product_id}>
+                {item.name} — {item.price} 円 × {item.quantity}
+              </li>
+            ))}
+          </ul>
+          <p>合計 {cart.total} 円</p>
+          <button disabled={sending} onClick={handleOrder}>
+            {sending ? '注文しています…' : '注文を確定する'}
+          </button>
+        </>
+      )}
+    </main>
+  )
+}
+
+export default Cart
+```
+
+`frontend/src/App.tsx` を、全文置き換える
+
+```tsx
+import { BrowserRouter, Link, Route, Routes } from 'react-router'
+import Cart from './pages/Cart'
+import Login from './pages/Login'
+import OrderList from './pages/OrderList'
+import PostDetail from './pages/PostDetail'
+import PostList from './pages/PostList'
+import ProductList from './pages/ProductList'
+
+function App() {
+  return (
+    <BrowserRouter>
+      <nav>
+        <Link to="/">記事</Link> | <Link to="/products">商品</Link> |{' '}
+        <Link to="/cart">カート</Link> | <Link to="/orders">注文履歴</Link> |{' '}
+        <Link to="/login">ログイン</Link>
+      </nav>
+      <Routes>
+        <Route path="/" element={<PostList />} />
+        <Route path="/posts/:postId" element={<PostDetail />} />
+        <Route path="/products" element={<ProductList />} />
+        <Route path="/cart" element={<Cart />} />
+        <Route path="/orders" element={<OrderList />} />
+        <Route path="/login" element={<Login />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default App
+```
+
+✅ 検証済み: TypeScript 7.0.2（`npm run build`・`npm run lint` も通過）
+
+**③ 買ってみる**
+
+carol でログインして、商品一覧で「SQL 図鑑」を1回、「冒険マンガ 1巻」を2回「カートに入れる」。
+
+```text
+「冒険マンガ 1巻」をカートに入れました（2個）
+```
+
+在庫0の商品は、ボタンが「売り切れ」になって押せません。上の「カート」を開きます。
+
+```text
+カート
+・SQL 図鑑 — 2200.00 円 × 1
+・冒険マンガ 1巻 — 528.00 円 × 2
+合計 3256.00 円
+[注文を確定する]
+```
+
+「注文を確定する」を押すと、注文履歴に移り、いちばん上に今の注文が「確定」で出ます。商品一覧に戻ると、在庫が減っています（SQL 図鑑 3 → 2、冒険マンガ 1巻 100 → 98）。
+
+✅ 検証済み: Chromium（Playwright）で確認。ログインしていないと「カートに入れられませんでした: Error: 401 Unauthorized」
+
+注文すると、教材の DB の在庫は本当に減ります。`scripts/seed.py` は、もうある商品の在庫を戻しません。戻したいときは、管理画面（1-4）で直します。
+
+**④ 壊れるのを見る**
+
+「冒険マンガ 2巻」（在庫1）を**2回**カートに入れ、「注文を確定する」を押します。
+
+```text
+注文できませんでした: Error: 409 Conflict
+```
+
+✅ 検証済み: Chromium で確認
+
+断られたことは分かりますが、**なぜ**断られたかが分かりません。Django は理由を返しています。
+
+```text
+{"detail": "「冒険マンガ 2巻」の在庫が足りません"}
+```
+
+3-3 で `raise HttpError(409, f"「{ci.product.name}」の在庫が足りません")` と書いた理由です。`client.ts` は、ステータスの番号と `statusText`（`Conflict`）しか見ていませんでした。
+
+**⑤ 直す: Django の `detail` を、例外の文に使う**
+
+`client.ts` の `// GET して、返ってきた JSON を T 型として返す` の**すぐ上**に追加
+
+```ts
+// 失敗した応答から、例外を作る。Django の HttpError は {"detail": "理由"} を返すので、読めたら理由を使う
+async function errorFrom(res: Response): Promise<Error> {
+  const body = (await res.json().catch(() => null)) as { detail?: unknown } | null
+  const detail = typeof body?.detail === 'string' ? body.detail : res.statusText
+  return new Error(`${res.status} ${detail}`)
+}
+```
+
+`client.ts` の中に3か所ある、次の行
+
+```ts
+    throw new Error(`${res.status} ${res.statusText}`)
+```
+
+を、すべて次の行に置き換える（`getJson`・`login`・`sendWithAuth` の3つ）
+
+```ts
+    throw await errorFrom(res)
+```
+
+✅ 検証済み: `npm run build`・`npm run lint` が通る
+
+もう一度「注文を確定する」を押すと、理由が出ます。
+
+```text
+注文できませんでした: Error: 409 「冒険マンガ 2巻」の在庫が足りません
+```
+
+✅ 検証済み: Chromium で確認
+
+直したのは `client.ts` だけなので、ほかの画面の文も変わりました。
+
+| 画面 | 直す前 | 直した後 |
+| --- | --- | --- |
+| ログイン（パスワード違い） | `401 Unauthorized` | `401 ユーザー名かパスワードが違います` |
+| 記事詳細（`/posts/9999`） | `404 Not Found` | `404 Not Found: No Post matches the given query.` |
+| 記事詳細（`/posts/abc`） | `422 Unprocessable Content` | `422 Unprocessable Content`（`detail` が文字列でなく一覧なので、そのまま） |
+
+✅ 検証済み: Chromium で3つとも確認
+
+このカートは、画面からは空にできません（減らす API を作っていない）。試したあとは、管理画面で「Cart items」から消してください。
+
+コミットするときは、`src/api/client.ts`・`src/App.tsx`・`src/pages/ProductList.tsx` と、新しい `pages/Cart.tsx` を入れます。
+
+### 5-2. 🔬 仕組み解剖
+
+| | `sendWithAuth` + `errorFrom` |
+| --- | --- |
+| 正式名称 | 対応する Django / Ninja の機能は無い。Ninja の `HttpError(409, "...")` が返す `{"detail": "..."}` を、画面の側で読む仕組み |
+| いつ・誰が | `sendWithAuth` が呼ぶたびに `fetchWithAccess` で身分証を付けて送る。401 なら更新して1回やり直す。2xx 以外なら `errorFrom` が本文の `detail` を読んで例外にする |
+| 発行される SQL | 注文の確定（`POST /api/orders`）は、3-3〜3-8 で作ったとおり。`select_for_update` でカートの行を押さえ、明細を作り、在庫を `F()` で減らす |
+| TS での対応物 | axios なら `error.response.data.detail` で読むのと同じ。`fetch` では本文を自分で `res.json()` する |
+| なぜこの設計 | 理由を一番よく知っているのは Django。画面で「在庫が足りません」を別に書くと、Django の判定と食い違う。Django の文をそのまま運ぶ |
+| 失敗すると | 本文が JSON でない（Django が落ちて HTML の 500 を返した、など）ときは `res.json()` が失敗する。`.catch(() => null)` で受け止め、`statusText` に戻す |
+
+✅ 検証済み: ④⑤と、`/posts/abc`（`detail` が一覧）の場合
+
+```text
+  [注文を確定する]
+    → postJsonWithAuth('/orders')
+       → sendWithAuth: POST /api/orders  Authorization: Bearer <access>
+            ├─ 401 → refreshAccess → もう1回 POST
+            ├─ 201 → 注文履歴へ
+            └─ 409 {"detail": "「冒険マンガ 2巻」の在庫が足りません"}
+                 → errorFrom → Error("409 「冒険マンガ 2巻」の在庫が足りません")
+                 → 「注文できませんでした: ...」
+```
+
+✅ 検証済み: ③〜⑤
+
+**POST を、401 のあとにやり直して大丈夫？**
+
+注文の POST を2回送るのは、普通は危ない（注文が2つできる）。でも 401 のときは、`JWTAuth` が**ビューを呼ぶ前に**断っているので、1回目の POST では何も起きていません。だから、身分証を取り替えてやり直しても、注文は1つです。
+
+✅ 検証済み: カートに商品がある状態で、壊れた身分証で `POST /api/orders` → 401。注文の数もカートの中身も変わらない
+
+### 5-3. 🐍 Python注
+
+新しい文法はありません。
+
+TypeScript の側で1つだけ補足します。`body?.detail` の `?.` は、`body` が `null` なら `undefined` を返し、そうでなければ `.detail` を読みます（オプショナルチェーン）。Python なら `body.get("detail") if body else None` に近いです。
+
+### 5-4. 解説 — なぜこう設計するか
+
+画面の「注文を確定する」ボタンは、送っている間 `disabled` にしています。でも、本当の守りは Django の側です。3-5 で `select_for_update()` を入れたので、ボタンを2連打されても、注文は1つしかできません（🔮1）。画面の `disabled` は「押した感じ」を良くするためのもので、守りにはなりません。`curl` で直接叩く人には、ボタンはありません。
+
+画面は、Django の判定（在庫・カートの中身・ログイン）をまねしません。送って、断られたら Django の理由を出す。判定は Django の1か所にだけあります。
+
+🧠 Django の考え方: 正しさは、データのそばで守る（DB の制約、トランザクション、行ロック）。画面は、その結果を利用者に伝える係。
+
+### 5-5. ⚠️ アンチパターン ／ 🔓 教材用の簡略化
+
+> ⚠️ **アンチパターン**: 画面の側で「在庫が足りるか」を先に判定して、足りなければボタンを押せなくし、それで安心する。画面が見ている在庫は、開いたときの古い数字。その間に誰かが買えば、Django は 409 を返す。画面の判定は親切のためだけにして、Django の 409 は必ず受け止める。
+
+> 🔓 **教材用の簡略化**: カートから商品を減らす・消す API が無い。
+> **本番では**: `DELETE /api/cart/items/{product_id}` などを作る。（第4部のまとめの宿題で扱う）
+
+> 🔓 **教材用の簡略化**: エラーの文に、ステータスの番号（`409`）と Django の英語の文（`Not Found: No Post matches the given query.`）がそのまま出る。
+> **本番では**: 番号は出さず、Django が開発者向けの文を返す場合（404 の既定の文など）は、画面で言い換える。
+
+### 5-6. 🔮 予測 → 動作確認
+
+1. `Cart.tsx` のボタンから `disabled={sending}` を消して、「注文を確定する」を**ダブルクリック**したら？ 注文はいくつできる？
+2. ⑤のあと、ログイン画面でパスワードを間違えると、何と出る？
+3. `errorFrom` の `.catch(() => null)` を消して、Django が HTML の 500 を返したら？
+
+<details><summary>答え</summary>
+
+1. POST が2本飛ぶが、注文は1つ。1本目が 201、2本目は 3-5 の行ロックで1本目の確定を待ち、カートが空になっているので 400「カートが空です」（検証済み: ログは `201` と `400`、注文は1つ増えただけ、在庫も1つ減っただけ）。画面は1本目の成功で注文履歴に移る
+2. 「ログインできませんでした: Error: 401 ユーザー名かパスワードが違います」。2-6 で書いた文が、そのまま届く（検証済み）
+3. HTML は JSON として読めないので `res.json()` が例外を投げ、`errorFrom` 自体が失敗する。画面には `SyntaxError: Unexpected token '<', "<html>..." is not valid JSON` のような、利用者に意味の無い文が出る。`.catch(() => null)` は、そのときに `statusText` へ戻すための保険で、あれば `Error: 500 Internal Server Error` になる（検証済み: Node.js 26 の `Response` に HTML の本文を入れて、両方を確認）
+
+</details>
+
+### 5-7. ✅ 想起チェック
+
+1. 画面の「注文を確定する」ボタンを `disabled` にすれば、二重注文は防げる？
+2. 401 で断られた POST を、身分証を取り替えてやり直してよいのはなぜ？
+
+<details><summary>答え</summary>
+
+1. 防げない。`curl` や連打の隙間など、画面を通らない呼び出しがある。守りは Django の行ロック（3-5）。`disabled` は使い心地のため
+2. `JWTAuth` がビューの前で断るので、1回目の POST では何も起きていないから
+
+</details>
+
+### 5-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **画面は Django の判定をまねせず、送って、断られたら Django の `detail` をそのまま利用者に見せる。守りは Django の側に置く。**
+
+📒 用語集に追記: `HttpError` の `detail` / オプショナルチェーン
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M2: 第4部` — 白紙再現と宿題

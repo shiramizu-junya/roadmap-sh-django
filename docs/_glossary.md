@@ -135,3 +135,5 @@
 | localStorage | Web Storage API の `localStorage` | ブラウザがオリジンごとに持つ小さな保存場所。ページを閉じても残る。JavaScript から何でも読めるので、本番で身分証を置くのは避ける | 第4部-4 |
 | 身分証の自動更新 | token refresh | 身分証（access）が切れて 401 が来たら、引換券（refresh）で新しい身分証をもらい、同じ呼び出しを1回だけやり直すこと | 第4部-4 |
 | `Record<K, V>` | TypeScript の組み込み型 | `K` の値を全部キーに持つ辞書の型。キーが1つでも欠けるとビルドが止まる | 第4部-4 |
+| `HttpError` の `detail` | Ninja の `HttpError(status, message)` の応答 | `raise HttpError(409, "理由")` は `{"detail": "理由"}` を返す。画面はこの `detail` を読んで、利用者に理由を見せる | 第4部-5 |
+| オプショナルチェーン | optional chaining（`?.`） | `a?.b` は、`a` が `null` か `undefined` なら `undefined`、そうでなければ `a.b`。途中が空でも落ちない | 第4部-5 |
