@@ -535,3 +535,387 @@ TypeError: Cannot read properties of null (reading 'toFixed')
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M1: 第4部 ステップ3` — 記事の一覧・詳細画面
+
+
+---
+
+## 第4部-3: 記事の一覧・詳細画面
+
+**❓ この回の問い**: 第2部の記事 API には、一覧（`GET /api/posts`）と1件（`GET /api/posts/{id}`）がある。画面で「一覧 → クリックで詳細」を作るとき、無い記事の URL を開かれたら、画面はどうなる？
+
+**作るもの**: React Router で「記事一覧」「記事詳細」「商品一覧」の3画面を切り替える。API を呼ぶ処理は `src/api/client.ts` の1か所にまとめる
+**重要度**: 🟡 よく使う — 画面が2つ以上になったら必ず要る。404 の扱いは、どの画面でも同じ問題になる
+**前ステップとの接続**: 2-12 のページング（`{"items", "count"}`）と、1-9 の 404（`get_object_or_404`）を画面から見る。型は 4-2 で作った `schema.d.ts` を使う
+
+### 3-0. このステップの初出
+
+**Django / Ninja**: なし / **Python**: なし
+
+画面側では、React Router を使います。
+
+> 🧒 **かみくだくと**: **React Router** は、ブラウザの URL（`/posts/3` など）を見て、どの画面（コンポーネント）を出すかを決める道具。`<Link>` で移るときは、ページを読み込み直さずに、画面だけを差し替える。
+
+### 3-1. 実践
+
+✋ **コピペで構いません。** ただし打ち終わったら、**どこか1行だけ変えて**動かしてください。
+変数名でも、文字列でも、数字でもいい。それだけで「読む」が「判断する」に変わります。
+
+**① React Router を入れる**（`frontend/` で実行）
+
+```bash
+npm install react-router@8.4.0
+```
+
+✅ 検証済み: react-router 8.4.0（`package.json` の `dependencies` に `"react-router": "^8.4.0"` が入る）
+
+`npm warn install-scripts` と出ることがありますが、Vite が使う `fsevents` の話で、React Router とは関係ありません。そのままで動きます。
+
+**② API を呼ぶ処理を1か所にまとめる**
+
+画面が3つになると、どの画面にも `API_URL` と `fetch` を書くことになります。1か所にまとめます。
+
+`frontend/src/api/client.ts` を新規作成
+
+```ts
+// API の住所。画面ごとに書かず、ここ1か所にまとめる
+export const API_URL = 'http://127.0.0.1:8000/api'
+
+// GET して、返ってきた JSON を T 型として返す
+export async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`)
+  return (await res.json()) as T
+}
+```
+
+**③ 画面を3つに分ける**
+
+今の `App.tsx` の商品一覧は、`pages/` に移します。
+
+`frontend/src/pages/ProductList.tsx` を新規作成（4-2 の `App.tsx` と同じ中身で、名前と `fetch` の部分だけ違う）
+
+```tsx
+import { useEffect, useState } from 'react'
+import { getJson } from '../api/client'
+import type { components } from '../api/schema'
+
+// 1件の商品。Ninja の ProductOut から自動で作った型を使う
+type Product = components['schemas']['ProductOut']
+
+function ProductList() {
+  const [products, setProducts] = useState<Product[]>([])
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    getJson<Product[]>('/products')
+      .then((data) => setProducts(data))
+      .catch((e: unknown) => setError(String(e)))
+  }, [])
+
+  return (
+    <main>
+      <h1>商品一覧</h1>
+      {error && <p>読み込めませんでした: {error}</p>}
+      <ul>
+        {products.map((p) => (
+          <li key={p.id}>
+            {p.name} — {p.price} 円（在庫 {p.stock}）
+            {p.rating_avg === null
+              ? ' レビューなし'
+              : ` ★${p.rating_avg.toFixed(1)}（${p.review_count}件）`}
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+
+export default ProductList
+```
+
+`frontend/src/pages/PostList.tsx` を新規作成
+
+```tsx
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router'
+import { getJson } from '../api/client'
+import type { components } from '../api/schema'
+
+// 記事の一覧。@paginate なので {"items": [...], "count": 全件数} の形（2-12）
+type PagedPosts = components['schemas']['PagedPostOut']
+
+function PostList() {
+  const [page, setPage] = useState<PagedPosts | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    getJson<PagedPosts>('/posts')
+      .then((data) => setPage(data))
+      .catch((e: unknown) => setError(String(e)))
+  }, [])
+
+  if (error) return <p>読み込めませんでした: {error}</p>
+  if (page === null) return <p>読み込み中…</p>
+
+  return (
+    <main>
+      <h1>記事一覧（{page.count}件）</h1>
+      <ul>
+        {page.items.map((post) => (
+          <li key={post.id}>
+            <Link to={`/posts/${post.id}`}>{post.title}</Link>
+            {post.category && `（${post.category.name}）`}
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+
+export default PostList
+```
+
+`frontend/src/pages/PostDetail.tsx` を新規作成
+
+```tsx
+import { useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router'
+import { getJson } from '../api/client'
+import type { components } from '../api/schema'
+
+type Post = components['schemas']['PostOut']
+
+function PostDetail() {
+  const { postId } = useParams() // URL の /posts/:postId の部分（文字列）
+  const [post, setPost] = useState<Post | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    getJson<Post>(`/posts/${postId}`)
+      .then((data) => setPost(data))
+      .catch((e: unknown) => setError(String(e)))
+  }, [postId])
+
+  if (error) return <p>読み込めませんでした: {error}</p>
+  if (post === null) return <p>読み込み中…</p>
+
+  return (
+    <main>
+      <p>
+        <Link to="/">← 記事一覧へ</Link>
+      </p>
+      <h1>{post.title}</h1>
+      <p>
+        {post.category?.name ?? 'カテゴリなし'} /{' '}
+        {new Date(post.created_at).toLocaleString('ja-JP')}
+      </p>
+      <p>{post.tags.map((tag) => `#${tag.name}`).join(' ')}</p>
+      <p>{post.body}</p>
+    </main>
+  )
+}
+
+export default PostDetail
+```
+
+`frontend/src/App.tsx` を、全文置き換える
+
+```tsx
+import { BrowserRouter, Link, Route, Routes } from 'react-router'
+import PostDetail from './pages/PostDetail'
+import PostList from './pages/PostList'
+import ProductList from './pages/ProductList'
+
+function App() {
+  return (
+    <BrowserRouter>
+      <nav>
+        <Link to="/">記事</Link> | <Link to="/products">商品</Link>
+      </nav>
+      <Routes>
+        <Route path="/" element={<PostList />} />
+        <Route path="/posts/:postId" element={<PostDetail />} />
+        <Route path="/products" element={<ProductList />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default App
+```
+
+✅ 検証済み: react-router 8.4.0 / TypeScript 7.0.2（`npm run build`・`npm run lint` も通過）
+
+`npm run dev` で `http://localhost:5173/` を開くと、記事が新しい順に並びます（`scripts/seed.py` の15件と、手で入れた記事）。
+
+```text
+記事 | 商品
+記事一覧（19件）
+・旅の持ち物リスト（旅行）
+・北海道でキャンプ（旅行）
+…
+```
+
+タイトルをクリックすると、`/posts/<id>` に移って詳細が出ます。
+
+```text
+記事 | 商品
+← 記事一覧へ
+Django のモデル入門
+プログラミング / 2026/11/1 8:58:15
+#python #django
+ForeignKey と ManyToManyField の違いをまとめた。
+```
+
+✅ 検証済み: Chromium（Playwright）で、一覧 → クリック → 詳細、上の「商品」で商品一覧に移ることを確認（件数・id・日時は環境で変わる）
+
+**④ 壊れるのを見る**
+
+無い記事の URL、`http://localhost:5173/posts/9999` を直接開きます。
+
+画面が**真っ白**になります。上の「記事 | 商品」まで消えます。Console には、次のエラーが出ます。
+
+```text
+Failed to load resource: the server responded with a status of 404 (Not Found)
+TypeError: Cannot read properties of undefined (reading 'map')
+    at PostDetail (http://localhost:5173/src/pages/PostDetail.tsx:...)
+```
+
+✅ 検証済み: Chromium で確認
+
+Django は正しく 404 を返しています。
+
+```bash
+curl -s http://127.0.0.1:8000/api/posts/9999
+```
+
+```text
+{"detail": "Not Found: No Post matches the given query."}
+```
+
+✅ 検証済み: Django 5.2.17 / django-ninja 1.7.1（ステータスは 404）
+
+なのに、`fetch` は **404 でも失敗にしません**。`getJson` はこの `{"detail": ...}` を `Post` として返し、`post.tags.map(...)` で `tags` が無くて落ちました。型は「`Post` のはず」と言っているだけで、中身を確かめてはいません。
+
+**⑤ 直す**
+
+`frontend/src/api/client.ts` の `getJson` の、`const res = ...` の下に4行
+
+```ts
+  if (!res.ok) {
+    // fetch は 404 や 500 では例外にしない。2xx 以外は、ここで例外にする
+    throw new Error(`${res.status} ${res.statusText}`)
+  }
+```
+
+✅ 検証済み: `npm run build`・`npm run lint` が通る
+
+もう一度 `/posts/9999` を開くと、こうなります。
+
+```text
+記事 | 商品
+読み込めませんでした: Error: 404 Not Found
+```
+
+✅ 検証済み: Chromium で確認
+
+直したのは `client.ts` の1か所だけですが、3つの画面が全部 `getJson` を使っているので、どの画面も 404 や 500 で真っ白にならなくなりました。
+
+コミットするときは、`npm install` で変わった `package.json`・`package-lock.json` と、`src/` の新しいファイル（`api/client.ts`・`pages/`）も一緒に入れます。
+
+### 3-2. 🔬 仕組み解剖
+
+| | React Router（`BrowserRouter` / `Routes` / `Route` / `Link` / `useParams`） |
+| --- | --- |
+| 正式名称 | React Router の「宣言型」（declarative mode）の使い方。`<Route path="..." element={...} />` を並べて書く |
+| いつ・誰が | URL が変わるたびに、`Routes` が `Route` を上から見て、合う `element` を出す。`/posts/:postId` の `:postId` の部分は、`useParams()` で文字列として取れる |
+| 発行される SQL | 画面の切り替え自体では無し。詳細を開くたびに `GET /api/posts/<id>` が1本飛び、Django 側で SQL が走る |
+| TS での対応物 | これ自体が TS / React 側の道具。Django の `urls.py`（URL → ビュー）を、画面の側でやっているもの |
+| なぜこの設計 | `<Link>` はページを読み込み直さないので、速く、画面の状態も消えない。URL は残るので、詳細の URL を共有・再読み込みもできる |
+| 失敗すると | 合う `Route` が無い URL（`/nope`）では何も出ず、Console に `No routes matched location "/nope"` と警告が出る |
+
+✅ 検証済み: react-router 8.4.0（`<Link>` で移る前に `window` に置いた値が、移った後も残っている = ページは読み込み直されていない）
+根拠: https://reactrouter.com/start/declarative/routing
+
+```text
+  /                 → <PostList />     → GET /api/posts       → {"items": [...], "count": 19}
+  /posts/1          → <PostDetail />   → GET /api/posts/1     → 200 {"id": 1, ...}
+  /posts/9999       → <PostDetail />   → GET /api/posts/9999  → 404 {"detail": ...}
+                                            getJson が throw → 「読み込めませんでした」
+  /products         → <ProductList />  → GET /api/products
+```
+
+✅ 検証済み: ③〜⑤
+
+**`fetch` が失敗にするのは「届かなかった」ときだけ**
+
+`fetch` の Promise が失敗（reject）になるのは、URL の誤りやネットワークの切断など、**応答が返ってこなかった**ときだけです。404 や 500 でも、応答が返ってくれば成功（resolve）です。だから、`res.ok`（ステータスが 200〜299 なら `true`）を自分で確かめます。
+根拠: https://developer.mozilla.org/en-US/docs/Web/API/Window/fetch
+
+4-1 の CORS で出た `Failed to fetch` は、応答が**ブラウザに捨てられた**ので「届かなかった」扱いになり、`.catch` に来ていました。今回の 404 とは違う種類の失敗です。
+
+### 3-3. 🐍 Python注
+
+新しい文法はありません。
+
+TypeScript の側で1つだけ補足します。
+
+- `getJson<T>(path)` の `<T>` は、**型の引数**（ジェネリクス）。呼ぶ側が `getJson<Post>(...)` と型を渡すと、戻り値が `Promise<Post>` になる。Python の `def get_json[T](path: str) -> T:` と同じ考え方
+- ただし `as T` は「そういうことにする」という宣言で、中身は確かめない。④が壊れたのはこのため
+
+### 3-4. 解説 — なぜこう設計するか
+
+API を呼ぶ処理を `client.ts` にまとめたのは、⑤のように**全部の画面に効く直しを、1か所で済ませる**ためです。4-4 では、ここに「ログインの身分証（JWT）を `Authorization` ヘッダに付ける」処理を足します。画面ごとに書いていたら、全部の画面を直すことになります。
+
+画面の側は、`error`・読み込み中（`null`）・中身ありの3つの状態を、上から順に `return` で出し分けています。Django の 404 は「そんな記事は無い」という正しい答えなので、画面もそれを伝えられるようにしておきます。
+
+🧠 Django の考え方: Django は、無いものには 404、形の違う入力には 422 と、**ステータスで答えを分ける**（1-9・1-7）。画面の側も、ステータスを見てから中身を読む。
+
+### 3-5. ⚠️ アンチパターン ／ 🔓 教材用の簡略化
+
+> ⚠️ **アンチパターン**: `fetch(...).then((res) => res.json())` のように、`res.ok` を見ずに JSON を読む。404 や 500 の中身（`{"detail": ...}`）を、正しいデータとして使ってしまう（④）。
+> 根拠: https://developer.mozilla.org/en-US/docs/Web/API/Response/ok
+
+> 🔓 **教材用の簡略化**: エラーは `Error: 404 Not Found` と、ステータスをそのまま画面に出している。
+> **本番では**: 404 なら「記事が見つかりません」、ネットワークの失敗なら「通信できませんでした」のように、利用者向けの言葉に変える。Django が返す `detail` も、画面に出すかは選ぶ（中身が開発者向けのことがある）。
+
+> 🔓 **教材用の簡略化**: `/posts/3` を直接開いたり再読み込みしたりしても動くのは、Vite の開発サーバが、どの URL にも `index.html` を返しているから。
+> **本番では**: 画面を配るサーバ（nginx など）にも、「無いパスには `index.html` を返す」設定が要る。無いと、詳細の URL を再読み込みしたときに 404 になる。
+> 根拠: https://vite.dev/guide/static-deploy
+
+### 3-6. 🔮 予測 → 動作確認
+
+1. `http://localhost:5173/nope`（どの `Route` にも合わない URL）を開いたら？
+2. `http://localhost:5173/posts/abc` を開いたら？ Django は何を返す？
+3. 記事の詳細を開いたまま、ブラウザで再読み込み（⌘R）したら？
+
+<details><summary>答え</summary>
+
+1. 上の「記事 | 商品」だけが出て、下は空。Console に `No routes matched location "/nope"` の警告（`StrictMode` なので2回）。エラーではないので、真っ白にはならない（検証済み）。直すなら、`Routes` の最後に `<Route path="*" element={<p>ページが見つかりません</p>} />` を足す（`*` はどの URL にも合う。検証済み: `/nope` で「ページが見つかりません」が出る）
+2. 「読み込めませんでした: Error: 422 Unprocessable Content」。`post_id: int` に `abc` は入らないので、Ninja が 422 を返す（1-7）。React Router は `:postId` を文字列のまま渡すだけで、数字かどうかは確かめていない（検証済み）
+3. 同じ詳細がもう一度出る。Vite の開発サーバが `/posts/1` にも `index.html` を返し、React Router が URL を見て `PostDetail` を出すから（検証済み: `/posts/3` も `index.html` で 200）。本番では 3-5 の設定が要る
+
+</details>
+
+### 3-7. ✅ 想起チェック
+
+1. `fetch` は、404 が返ってきたとき失敗（reject）になる？
+2. `/posts/:postId` の `postId` は、画面の中でどうやって取る？ 型は？
+
+<details><summary>答え</summary>
+
+1. ならない。応答が返ってくれば成功。`res.ok` を自分で確かめる
+2. `useParams()` で取る。型は文字列（`string | undefined`）。数字に変えていないので、Django 側の `int` の検証（422）が最後の砦になる
+
+</details>
+
+### 3-8. 📇 まとめカード
+
+この回で覚えることは1つだけ: **`fetch` は 404 でも失敗にしない。API を呼ぶ処理を1か所にまとめ、そこで `res.ok` を確かめる。**
+
+📒 用語集に追記: React Router / `useParams` / `res.ok` / ジェネリクス
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M1: 第4部 ステップ4` — ログイン画面

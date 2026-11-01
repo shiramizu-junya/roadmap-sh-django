@@ -128,3 +128,7 @@
 | 型の生成 | type generation | 型を手で書かず、別の「正」（ここでは Ninja の `Schema` → OpenAPI）から自動で作ること。元を変えたら作り直す | 第4部-2 |
 | `import type` | type-only import（TypeScript） | 型だけを読み込む書き方。ビルド後の JavaScript からは消える。`verbatimModuleSyntax` では、型はこれで読む決まり | 第4部-2 |
 | 絞り込み | narrowing（TypeScript） | `x === null ? … : …` のような条件の先で、TypeScript が型を狭めて扱うこと。`number \| null` が `number` になる | 第4部-2 |
+| React Router | React Router（`react-router`） | ブラウザの URL を見て、どの画面（コンポーネント）を出すかを決める道具。`<Link>` で移るときはページを読み込み直さない | 第4部-3 |
+| `useParams` | React Router のフック | URL の `/posts/:postId` の `:postId` の部分を取り出す。値は文字列（`string \| undefined`） | 第4部-3 |
+| `res.ok` | `Response.ok`（Fetch API） | 応答のステータスが 200〜299 なら `true`。`fetch` は 404 や 500 でも失敗にしないので、これを自分で確かめる | 第4部-3 |
+| ジェネリクス | generics（型の引数） | `getJson<Post>(...)` のように、呼ぶ側が型を渡せる仕組み。Python の `def f[T](...) -> T:` と同じ考え方 | 第4部-3 |
