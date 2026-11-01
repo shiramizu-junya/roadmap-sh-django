@@ -1771,3 +1771,566 @@ TypeScript の側で1つだけ補足します。`body?.detail` の `?.` は、`b
    そこだけ説明して、`docs/_glossary.md` に追記します。
 
 ▶ **次**: `M2: 第4部` — 白紙再現と宿題
+
+
+---
+
+## 第4部のまとめ（M2）— 白紙再現と宿題
+
+ここまでで、React の画面から Django の API を一通り呼べるようになりました。最後に、**思い出して書く練習**をして定着させます。
+
+> ✍️ **翌日にやってください。** 書いた直後だと、短い記憶だけで書けてしまい、練習になりません。
+
+### 1. 白紙再現（3段階から選ぶ）
+
+第4部の中心は、画面ではなく `frontend/src/api/client.ts`（API を呼ぶ1か所）です。ここを再現します。
+
+| 段階 | やること | 判定 |
+| --- | --- | --- |
+| **Lv1 穴埋め** | 下のコードの `____` を埋める | `npm run build` が通り、画面で「ログイン → 商品をカートに入れる → 注文を確定する → 注文履歴に出る」が動く。在庫不足のときは理由が出る |
+| **Lv2 ファイル単位** | `src/api/client.ts` を閉じ、白紙から書き直す（`pages/Cart.tsx` でもよい） | 同上。`npm run lint` も通る |
+| **Lv3 構成から** | 要件だけを見て、どのファイルに何を書くかから組み立てる | 同上 |
+
+画面側には自動のテストが無いので、判定はビルドと、ブラウザで流れを1周することで行います。
+
+> ✍️ まず Lv1 から。できたら次回 Lv2 に上げる。
+> 思い出せなかった箇所に印を付け、**その箇所の 🔬 仕組み解剖だけ**読み返してください。
+
+#### Lv1 穴埋め
+
+`frontend/` で `src/api/client.ts` を別名で退避（`cp src/api/client.ts /tmp/client.ts.bak`）してから、次のコードを**全文**貼って `____` を埋めます。同じ番号には同じ言葉が入ります。
+
+```ts
+import type { components } from './schema'
+
+type TokenOut = components['schemas']['TokenOut']
+type AccessOut = components['schemas']['AccessOut']
+
+// API の住所。画面ごとに書かず、ここ1か所にまとめる
+export const API_URL = 'http://127.0.0.1:8000/api'
+
+// 失敗した応答から、例外を作る。Django の HttpError は {"detail": "理由"} を返すので、読めたら理由を使う
+async function errorFrom(res: Response): Promise<Error> {
+  const body = (await res.json().____①____(() => null)) as { detail?: unknown } | null
+  const detail = typeof body?.detail === 'string' ? body.detail : res.____②____
+  return new Error(`${res.status} ${detail}`)
+}
+
+// GET して、返ってきた JSON を T 型として返す
+export async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`)
+  if (!res.____③____) {
+    // fetch は 404 や 500 では例外にしない。2xx 以外は、ここで例外にする
+    throw await errorFrom(res)
+  }
+  return (await res.json()) as T
+}
+
+// ログインして、身分証（access）と引換券（refresh）をブラウザに保存する
+export async function login(username: string, password: string): Promise<void> {
+  const res = await fetch(`${API_URL}____⑭____`, {
+    method: 'POST',
+    headers: { 'Content-Type': '____⑫____' },
+    body: JSON.____④____({ username, password }),
+  })
+  if (!res.____③____) {
+    throw await errorFrom(res)
+  }
+  const tokens = (await res.json()) as TokenOut
+  localStorage.____⑤____('access', tokens.access)
+  localStorage.____⑤____('refresh', tokens.refresh)
+}
+
+// ログアウト。保存した身分証と引換券を消す
+export function logout(): void {
+  localStorage.____⑥____('access')
+  localStorage.____⑥____('refresh')
+}
+
+// 身分証を Authorization ヘッダに付けて呼ぶ。body を渡したら、JSON にして送る
+function fetchWithAccess(path: string, method: string, body?: unknown): Promise<Response> {
+  const headers: Record<string, string> = {
+    ____⑧____: `____⑨____ ${localStorage.____⑦____('access')}`,
+  }
+  if (body !== undefined) {
+    headers['Content-Type'] = '____⑫____'
+  }
+  return fetch(`${API_URL}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.____④____(body),
+  })
+}
+
+// 引換券で、新しい身分証をもらう。引換券が無いか切れていたら、ログアウトして false
+async function ____⑪____(): Promise<boolean> {
+  const refresh = localStorage.____⑦____('refresh')
+  if (refresh === null) {
+    return false
+  }
+  const res = await fetch(`${API_URL}____⑬____`, {
+    method: 'POST',
+    headers: { 'Content-Type': '____⑫____' },
+    body: JSON.____④____({ refresh }),
+  })
+  if (!res.____③____) {
+    logout()
+    return false
+  }
+  const data = (await res.json()) as AccessOut
+  localStorage.____⑤____('access', data.access)
+  return true
+}
+
+// ログインが要る API を呼んで、返ってきた JSON を T 型として返す
+async function sendWithAuth<T>(path: string, method: string, body?: unknown): Promise<T> {
+  let res = await fetchWithAccess(path, method, body)
+  if (res.status === ____⑩____ && (await ____⑪____())) {
+    // 身分証が切れていた。新しい身分証で、1回だけやり直す
+    res = await fetchWithAccess(path, method, body)
+  }
+  if (!res.____③____) {
+    throw await errorFrom(res)
+  }
+  return (await res.json()) as T
+}
+
+// ログインが要る API を GET する
+export function getJsonWithAuth<T>(path: string): Promise<T> {
+  return sendWithAuth<T>(path, 'GET')
+}
+
+// ログインが要る API に POST する。body は JSON にして送る
+export function postJsonWithAuth<T>(path: string, body?: unknown): Promise<T> {
+  return sendWithAuth<T>(path, 'POST', body)
+}
+```
+
+⚠️ 未実行（穴埋め用のため、このままでは動かない。検証手順: 埋めたあと `npm run build`）
+
+<details><summary>答え</summary>
+
+① `catch`（4-5）
+② `statusText`（4-3）
+③ `ok`（4-3）
+④ `stringify`（4-4）
+⑤ `setItem`（4-4）
+⑥ `removeItem`（4-4）
+⑦ `getItem`（4-4）
+⑧ `Authorization`（4-4。2-6 の curl と同じヘッダ）
+⑨ `Bearer`（4-4。2-6 と同じ）
+⑩ `401`（4-4）
+⑪ `refreshAccess`（4-4）
+⑫ `application/json`（4-4）
+⑬ `/auth/refresh`（4-4。2-6 で作った URL）
+⑭ `/auth/login`（4-4。2-6 で作った URL）
+
+埋めた全体は、第4部-5 の `client.ts` と1文字違わず同じです（機械的に照合済み。エディタの整形で引用符や改行が変わるのは構いません）。
+
+✅ 検証済み: TypeScript 7.0.2 / react-router 8.4.0（`npm run build`・`npm run lint`）
+
+</details>
+
+終わったら、退避したファイルを戻してください（`cp /tmp/client.ts.bak src/api/client.ts`）。
+
+#### Lv3 の要件
+
+- API の住所と、`fetch` の呼び出しは1か所（`client.ts`）にまとめる。2xx 以外は例外にし、Django の `detail` があれば、それを理由として出す
+- 型は手で書かず、Ninja の OpenAPI から `npm run gen:api` で作る
+- 記事一覧 → 記事詳細、商品一覧、カート、注文履歴、ログインの画面を、URL で切り替える。無い記事を開いても真っ白にならない
+- ログインしたら身分証と引換券を保存し、ログインが要る呼び出しには身分証を付ける。身分証が切れたら引換券で取り替えて1回だけやり直し、引換券も切れていたらログインし直してもらう
+- 「カートに入れる」「注文を確定する」は POST。注文中はボタンを押せなくするが、二重注文の守りは Django に任せる
+
+### 2. 宿題
+
+**宿題はブランチを切ってやってください。** main は第4部の終わりの状態のまま残します。
+
+```bash
+git switch -c homework-p4   # 宿題用のブランチを作って移る
+# … 宿題をやる …
+git switch main             # 終わったら main に戻る
+```
+
+⚠️ 未実行（Git の操作のため。検証手順: `git branch` で今いるブランチを確認）
+
+#### Lv1 基礎確認 — 記事を検索する
+
+**課題**: 記事一覧の上に入力欄と「探す」ボタンを置き、2-11 の `?q=` で検索する。空で探したら全部。
+
+**ヒント**:
+- 入力欄の文字と、「探す」を押して決まった言葉は、別の `useState` にする（打つたびに API を呼ばない）
+- `useEffect` の第2引数に言葉を入れると、変わるたびに読み直す
+- URL に入れる言葉は、そのまま足さない。`#` や `&` が入っていたら？
+
+**判定基準**:
+- 「django」で探した件数が、`curl -s "http://127.0.0.1:8000/api/posts?q=django"` の `count` と同じ
+- 「100%」で「進捗 100% 達成」が出る
+- 「#django」で0件（全件にならない）
+
+<details><summary>解答例</summary>
+
+`frontend/src/pages/PostList.tsx`（全文置き換える）
+
+```tsx
+import { useEffect, useState } from 'react'
+import type { SubmitEvent } from 'react'
+import { Link } from 'react-router'
+import { getJson } from '../api/client'
+import type { components } from '../api/schema'
+
+// 記事の一覧。@paginate なので {"items": [...], "count": 全件数} の形（2-12）
+type PagedPosts = components['schemas']['PagedPostOut']
+
+function PostList() {
+  const [page, setPage] = useState<PagedPosts | null>(null)
+  const [error, setError] = useState('')
+  const [input, setInput] = useState('') // 入力欄の文字
+  const [q, setQ] = useState('') // 検索に使う言葉。「探す」を押したときに決まる
+
+  useEffect(() => {
+    // 空なら全部。URL に入れる言葉は encodeURIComponent で、& や % を安全な形にする
+    const query = q ? `?q=${encodeURIComponent(q)}` : ''
+    getJson<PagedPosts>(`/posts${query}`)
+      .then((data) => setPage(data))
+      .catch((e: unknown) => setError(String(e)))
+  }, [q]) // q が変わるたびに読み直す
+
+  function handleSearch(e: SubmitEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setQ(input)
+  }
+
+  if (error) return <p>読み込めませんでした: {error}</p>
+  if (page === null) return <p>読み込み中…</p>
+
+  return (
+    <main>
+      <h1>記事一覧（{page.count}件）</h1>
+      <form onSubmit={handleSearch}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} />{' '}
+        <button type="submit">探す</button>
+      </form>
+      <ul>
+        {page.items.map((post) => (
+          <li key={post.id}>
+            <Link to={`/posts/${post.id}`}>{post.title}</Link>
+            {post.category && `（${post.category.name}）`}
+          </li>
+        ))}
+      </ul>
+    </main>
+  )
+}
+
+export default PostList
+```
+
+✅ 検証済み: Chromium（Playwright）で「django」（`curl` の `count` と同じ件数）、「100%」（1件）を確認
+
+`encodeURIComponent` を付けないと、言葉の中の記号が URL の記号として読まれます。
+
+| 言葉 | そのまま足す | `encodeURIComponent` |
+| --- | --- | --- |
+| `#django` | 全件（`#` から後ろは URL の「しおり」扱いで、送られない） | 0件（`#django` という文字を探す） |
+| `django&category_id=1` | `django` で、カテゴリ1に絞られる | 0件（その文字を探す） |
+
+✅ 検証済み: ブラウザの `fetch` で両方を比べた
+根拠: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/encodeURIComponent
+
+</details>
+
+#### Lv2 応用 — カートから商品を消す
+
+**課題**: `DELETE /api/cart/items/{product_id}` を作り、カートの画面に「削除」ボタンを付ける。自分のカートの行だけ消せる。入っていない商品は 404。
+
+**ヒント**:
+- Django 側は、1-11 の記事の削除（`response={204: None}` と `Status(204, None)`）と同じ形。「自分のカートの」は `cart__user=` でたどる（3-2）
+- 画面側は、`client.ts` に `deleteWithAuth` を足す。`sendWithAuth` に `'DELETE'` を渡せばよい……が、**204 の応答には本文が無い**。`sendWithAuth` の最後の行で何が起きる？
+- 消したあとは、カートを読み直す（合計も変わる）
+- Django の API を足したら `npm run gen:api`
+
+**判定基準**:
+- 下の解答例のテストが通る（自分の行は消え、他人の行は残る。2回目は 404）
+- 画面で「削除」を押すと、その行が消えて合計が変わる。エラーの文は出ない
+
+<details><summary>解答例</summary>
+
+`shop/api.py`（`@cart_router.get("", response=CartOut, auth=JWTAuth())` の**上**に追加）
+
+```python
+@cart_router.delete("/items/{product_id}", response={204: None}, auth=JWTAuth())
+def remove_from_cart(request: HttpRequest, product_id: int):
+    assert request.user.is_authenticated
+    # 自分のカートの、その商品の行だけを探す。他人のカートや、入っていない商品なら 404
+    item = get_object_or_404(CartItem, cart__user=request.user, product_id=product_id)
+    item.delete()
+    return Status(204, None)
+```
+
+`tests/test_homework_p4_lv2.py`（新規）
+
+```python
+from decimal import Decimal
+
+from ninja.testing import TestClient
+
+from accounts.models import User
+from blog.models import Category
+from config.api import api
+from shop.models import Cart, CartItem, Inventory, Product
+
+client = TestClient(api)
+
+
+def test_remove_from_cart(user: User, auth_headers: dict[str, str]) -> None:
+    category = Category.objects.create(name="本")
+    product = Product.objects.create(name="本A", price=Decimal("100"), category=category)
+    Inventory.objects.create(product=product, quantity=5)
+    other = User.objects.create_user(username="bob", password="pass1234")
+    CartItem.objects.create(cart=Cart.objects.create(user=user), product=product, quantity=2)
+    CartItem.objects.create(cart=Cart.objects.create(user=other), product=product, quantity=1)
+
+    res = client.delete(f"/cart/items/{product.id}", headers=auth_headers)
+    assert res.status_code == 204
+    assert not CartItem.objects.filter(cart__user=user).exists()  # 自分の行は消えた
+    assert CartItem.objects.filter(cart__user=other).exists()  # 他人の行は残る
+
+    # もう入っていないので 404
+    assert client.delete(f"/cart/items/{product.id}", headers=auth_headers).status_code == 404
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1 / MySQL 8.4.11（ruff・mypy も通過。API を消すとテストが落ちる）
+
+`frontend/src/api/client.ts` の `sendWithAuth` の、`return (await res.json()) as T` の**すぐ上**に追加
+
+```ts
+  if (res.status === 204) {
+    // 204 No Content は本文が空。res.json() すると落ちるので、読まずに終える
+    return undefined as T
+  }
+```
+
+ファイルの最後に追加
+
+```ts
+// ログインが要る API に DELETE する。成功すると本文は無い（204）
+export function deleteWithAuth(path: string): Promise<void> {
+  return sendWithAuth<void>(path, 'DELETE')
+}
+```
+
+`frontend/src/pages/Cart.tsx`（全文置き換える）
+
+```tsx
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
+import { deleteWithAuth, getJsonWithAuth, postJsonWithAuth } from '../api/client'
+import type { components } from '../api/schema'
+
+type CartOut = components['schemas']['CartOut']
+type OrderOut = components['schemas']['OrderOut']
+
+function Cart() {
+  const navigate = useNavigate()
+  const [cart, setCart] = useState<CartOut | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [orderError, setOrderError] = useState('')
+  const [removeError, setRemoveError] = useState('')
+  const [sending, setSending] = useState(false) // 注文を送っている間は true
+
+  function loadCart() {
+    getJsonWithAuth<CartOut>('/cart')
+      .then((data) => setCart(data))
+      .catch((e: unknown) => setLoadError(String(e)))
+  }
+
+  useEffect(loadCart, [])
+
+  function handleRemove(productId: number) {
+    deleteWithAuth(`/cart/items/${productId}`)
+      .then(() => loadCart()) // 消したら、カートを読み直す（合計も変わる）
+      .catch((e: unknown) => setRemoveError(String(e)))
+  }
+
+  function handleOrder() {
+    setSending(true)
+    postJsonWithAuth<OrderOut>('/orders')
+      .then(() => navigate('/orders')) // 確定したら注文履歴へ
+      .catch((e: unknown) => {
+        setOrderError(String(e))
+        setSending(false)
+      })
+  }
+
+  if (loadError) return <p>読み込めませんでした: {loadError}</p>
+  if (cart === null) return <p>読み込み中…</p>
+
+  return (
+    <main>
+      <h1>カート</h1>
+      {orderError && <p>注文できませんでした: {orderError}</p>}
+      {removeError && <p>削除できませんでした: {removeError}</p>}
+      {cart.items.length === 0 ? (
+        <p>カートは空です</p>
+      ) : (
+        <>
+          <ul>
+            {cart.items.map((item) => (
+              <li key={item.product_id}>
+                {item.name} — {item.price} 円 × {item.quantity}{' '}
+                <button onClick={() => handleRemove(item.product_id)}>削除</button>
+              </li>
+            ))}
+          </ul>
+          <p>合計 {cart.total} 円</p>
+          <button disabled={sending} onClick={handleOrder}>
+            {sending ? '注文しています…' : '注文を確定する'}
+          </button>
+        </>
+      )}
+    </main>
+  )
+}
+
+export default Cart
+```
+
+✅ 検証済み: Chromium で「削除」→ 行が消えて合計が変わり、最後の1つを消すと「カートは空です」
+
+204 の扱いを足さないと、こうなります。
+
+```text
+削除できませんでした: SyntaxError: Failed to execute 'json' on 'Response': Unexpected end of JSON input
+```
+
+✅ 検証済み: Chromium で確認
+
+しかも、**Django では削除は成功しています**（再読み込みすると消えている）。画面だけが「失敗した」と言い、行も残って見える、いちばん厄介な食い違いです。
+根拠: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/204
+
+`npm run gen:api` を流すと、`schema.d.ts` に `/api/cart/items/{product_id}` が増えます（検証済み）。
+
+</details>
+
+#### Lv3 発展 — ログアウトで引換券を使えなくする
+
+**課題**: 今のログアウトは、ブラウザから身分証と引換券を**消すだけ**です。引換券を写し取られていたら、ログアウトしたあとも、その引換券で新しい身分証をもらえてしまいます。`POST /api/auth/logout` を作り、受け取った引換券を Django 側で使えなくする。画面の「ログアウト」も、これを呼んでから消すようにする。
+
+**ヒント**:
+- django-ninja-jwt には、使えなくした引換券を覚えておくアプリ（`ninja_jwt.token_blacklist`）がある。`INSTALLED_APPS` に足して、`migrate`
+- `RefreshToken(引換券).blacklist()` で、その引換券を「使えない一覧」に入れる
+- 2-6 の `/auth/refresh` は、そのままでよい。アプリを入れると、`RefreshToken(...)` を作るときに一覧も確かめるようになる
+- 画面側は、`logout()` の前に `POST /auth/logout` を呼ぶ。失敗しても（もう切れているなど）、手元からは消す
+
+**判定基準**:
+- ログアウトの前は `/auth/refresh` が 200、後は 401
+- 2回目のログアウトは 401
+- 下の解答例のテストが通る。既存のテストも全部通る
+
+<details><summary>解答例</summary>
+
+`config/settings.py` の `INSTALLED_APPS` の、`"corsheaders",` の下に1行
+
+```python
+    "ninja_jwt.token_blacklist",  # 追加: ログアウトした引換券を「使えない一覧」に入れる
+```
+
+```bash
+uv run python manage.py migrate
+```
+
+✅ 検証済み: `token_blacklist` のマイグレーションが当たる（`0001` 〜 `0012`）
+
+`accounts/api.py`（`class RegisterIn(Schema):` の**上**に追加）
+
+```python
+@router.post("/logout", response={204: None, 401: ErrorOut})
+def logout(request: HttpRequest, payload: RefreshIn):
+    try:
+        # 引換券を「使えない一覧」に入れる。以後 /auth/refresh に出しても 401
+        RefreshToken(payload.refresh).blacklist()
+    except TokenError:
+        return Status(401, {"detail": "引換券が無効か、期限切れです"})
+    return Status(204, None)
+```
+
+`tests/test_homework_p4_lv3.py`（新規）
+
+```python
+from ninja.testing import TestClient
+
+from accounts.models import User
+from config.api import api
+
+client = TestClient(api)
+
+
+def test_logout_revokes_refresh(user: User) -> None:
+    tokens = client.post("/auth/login", json={"username": "alice", "password": "pass1234"}).json()
+    refresh = {"refresh": tokens["refresh"]}
+    assert client.post("/auth/refresh", json=refresh).status_code == 200  # ログアウト前は使える
+
+    assert client.post("/auth/logout", json=refresh).status_code == 204
+    assert client.post("/auth/refresh", json=refresh).status_code == 401  # ログアウト後は使えない
+    assert client.post("/auth/logout", json=refresh).status_code == 401  # 2回目も 401
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja-jwt 5.4.5（既存のテストと合わせて全部通る。変更を外すとテストが落ちる）
+
+`frontend/src/api/client.ts` の `logout` 関数の**下**に追加
+
+```ts
+// サーバ側でも引換券を使えなくしてから、ログアウトする
+export async function logoutEverywhere(): Promise<void> {
+  const refresh = localStorage.getItem('refresh')
+  if (refresh !== null) {
+    // 失敗しても（引換券がもう切れているなど）、手元からは消す
+    await fetch(`${API_URL}/auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh }),
+    }).catch(() => undefined)
+  }
+  logout()
+}
+```
+
+`frontend/src/pages/OrderList.tsx` の `import` の `logout` を `logoutEverywhere` に変え、`handleLogout` を置き換える
+
+```tsx
+  function handleLogout() {
+    logoutEverywhere().then(() => navigate('/login'))
+  }
+```
+
+✅ 検証済み: Chromium でログアウトし、その前に写しておいた引換券で `/auth/refresh` → 401「引換券が無効か、期限切れです」
+
+アプリを入れると、ログインのたびに「発行した引換券」が DB に1行ずつ記録されます（`/auth/refresh` で確かめる一覧の元）。
+根拠: https://eadwincode.github.io/django-ninja-jwt/blacklist_app/
+
+**それでも残るもの**: ログアウトしても、**もう渡した身分証（access）は、期限の5分までは使えます**。身分証は、Django が何も覚えずに署名だけで確かめる作りだからです（検証済み: ログアウト後に、前の身分証で `GET /api/orders` → 200）。身分証を短く（5分）しているのは、このためです。
+
+</details>
+
+### 3. 第4部の終わりに
+
+**ここまでで、できるようになったこと**
+- 別のオリジンの画面から API を呼ぶために、CORS を必要な分だけ許せる（プリフライトの仕組みも説明できる）
+- Ninja の OpenAPI から TypeScript の型を作り、Django の `Schema` の変更を `npm run build` で見つけられる
+- `fetch` の呼び出しを1か所にまとめ、404・409 などで画面が壊れないようにし、Django の理由を利用者に見せられる
+- JWT の身分証と引換券を使い分け、切れたら自動で取り替えられる
+- 二重注文や在庫の守りは Django（行ロック・トランザクション）に置き、画面は結果を伝える係にできる
+
+**ここで止めても成果物になります。** 手元には「ブログと EC 風の API」と、それをログイン付きで使える React の画面（記事・商品・カート・注文）があり、API はテストで、画面はビルドとブラウザで動きを確かめられています。
+
+**このあと**
+- 本編はここまでです。最後の `M3` で、つまずきやすかった点のまとめと、この教材で扱わなかったこと（SSR・OAuth・多言語・決済・デプロイなど）を、理由と一次情報付きで並べます
+- 第1部のあとに挑戦できる `MP: url-shortening-service` も、まだなら残っています
+
+分からないまま残った箇所は、`# TODO: わからん` の印だけ見返せば十分です。
+
+---
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。
+   そこだけ説明して、`docs/_glossary.md` に追記します。
+
+▶ **次**: `M3` — つまずき・まとめ・範囲外リスト
