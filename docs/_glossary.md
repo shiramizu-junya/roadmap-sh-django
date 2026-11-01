@@ -124,3 +124,7 @@
 | CORS | Cross-Origin Resource Sharing（オリジン間リソース共有） | 別のオリジンのページに応答を読ませてよいかを、サーバが応答のヘッダ（`Access-Control-Allow-Origin`）で伝える仕組み。読ませるか決めるのはブラウザ | 第4部-1 |
 | プリフライト | preflight request | ヘッダ付きの POST などの前に、ブラウザが `OPTIONS` で「送ってよいか」を下見する問い合わせ | 第4部-1 |
 | `CORS_ALLOWED_ORIGINS` | django-cors-headers の設定 | 応答を読ませてよいオリジンの一覧。パスは付けない（`http://localhost:5173`） | 第4部-1 |
+| openapi-typescript | openapi-typescript | OpenAPI の説明書（JSON）を読んで、TypeScript の型だけを書き出す道具。この教材では `npm run gen:api` で動かす | 第4部-2 |
+| 型の生成 | type generation | 型を手で書かず、別の「正」（ここでは Ninja の `Schema` → OpenAPI）から自動で作ること。元を変えたら作り直す | 第4部-2 |
+| `import type` | type-only import（TypeScript） | 型だけを読み込む書き方。ビルド後の JavaScript からは消える。`verbatimModuleSyntax` では、型はこれで読む決まり | 第4部-2 |
+| 絞り込み | narrowing（TypeScript） | `x === null ? … : …` のような条件の先で、TypeScript が型を狭めて扱うこと。`number \| null` が `number` になる | 第4部-2 |
