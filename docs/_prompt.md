@@ -314,11 +314,14 @@ Django の管理画面はセッション認証のまま同居するので、**�
 | `drf` | DRF なら同じ API をどう書くか（比較のみ） | 第2部まで | djangorestframework |
 | `basic-auth` | Basic 認証（毎回、名前と合言葉を送る）。なぜ使われなくなったか | 第2部まで | なし |
 | `session-auth` | セッション認証（Cookie で入場券を持たせる）。CSRF の検査を戻す | `basic-auth` | なし（Django 標準の sessions） |
-| `oauth` | OAuth 2.0（合言葉を渡さずに「許可」だけ渡す） | `session-auth` | Keycloak コンテナ |
-| `oidc` | OpenID Connect（OAuth の上に「この人はだれか」を足す） | `oauth` | Keycloak コンテナ |
-| `saml` | SAML（会社向けのシングルサインオン）。**しくみが分かるところまで** | `oidc` | Keycloak コンテナ |
+| `oauth` | OAuth 2.0（合言葉を渡さずに「許可」だけ渡す）。**最後の1ステップで OpenID Connect**（OAuth の上に「この人はだれか」を足す。「Google でログイン」の正体） | `session-auth` | Keycloak コンテナ |
+| `web-security` | Web セキュリティ: パスワードのハッシュ（bcrypt など）・HTTPS と SSL/TLS・CORS・CSP・OWASP・サーバーの守り。ステップが多いので `MX: web-security 1` のように分けて呼ぶ | `oauth` | なし |
 
-**認証の5つは、この順に呼ぶ。** 前のやり方で困ったことを、次のやり方が解決する順になっている（なぜなぜでつながる。§4.14）。Token 認証・JWT は第2部（2-6）で済んでいるので入れない。`session-auth` では、第2部の JWT との比較表（§2.3）を思い出させる。外のサービス（Google など）のアカウントは作らせず、**Keycloak を `compose.yaml` に足して、手元だけで試す**（Docker 教材の Compose の知識を使う）。
+**認証の3つは、この順に呼ぶ。** 前のやり方で困ったことを、次のやり方が解決する順になっている（なぜなぜでつながる。§4.14）。Token 認証・JWT は第2部（2-6）で済んでいるので入れない。`session-auth` では、第2部の JWT との比較表（§2.3）を思い出させる。外のサービス（Google など）のアカウントは作らせず、**Keycloak を `compose.yaml` に足して、手元だけで試す**（Docker 教材の Compose の知識を使う）。
+
+**認証のあとは `web-security`。** 認証で残った問いが、そのまま Web セキュリティの問いになるため（Basic 認証の合言葉をのぞかれたら？→ HTTPS / Cookie をほかのサイトから悪用されたら？→ CORS・CSRF・CSP / DB の合言葉が盗まれたら？→ ハッシュ）。
+
+**SAML・OpenID（単独）・GraphQL・gRPC・SOAP は入れない**（読み手の決定、2026-11-24）。roadmap.sh/backend で灰色（Order not strict / Learn anytime ＝ いつ学んでもよい）の印が付いているため。必要になったら、この表に行を足す。
 
 **`MX` を呼ばれたら、まず前提を満たしているか確認する。** 満たしていなければ、何が足りないかを伝えて止まる。
 
@@ -353,14 +356,17 @@ rm -rf /tmp/dr
 
 本編（第1部〜第4部）は終わった。ここからは **roadmap.sh/backend を上から順に**、話題を1つずつ `MX` で足していく（読み手の決定、2026-11-24。「何を学びたいか分からないので、順番を決めてくれるものに乗る」）。毎回、**このリポジトリの blog / shop / accounts に足して試す**。新しいアプリは作らない。
 
-| roadmap.sh/backend の順 | 話題 | MX |
-| --- | --- | --- |
-| 7 Learn about APIs の認証 | Basic → セッション → OAuth → OpenID Connect → SAML | `basic-auth` → `session-auth` → `oauth` → `oidc` → `saml` ← **次はここから** |
-| 8 Caching | Redis・HTTP キャッシュ | `cache` |
-| 9 Web Servers / Web Security | Nginx・パスワードの守り方・HTTPS・CORS・OWASP | まだ表に無い。その話題に来たら §2.5 に行を足す |
-| 10〜12 AI | LLM のしくみ・AI を使う機能（Streaming・Function Calling） | 同上 |
+| 順 | roadmap.sh/backend の場所 | 話題 | MX |
+| --- | --- | --- | --- |
+| 1 | 右のわき道: Authentication | Basic → セッション（Cookie）→ OAuth（最後に OpenID Connect） | `basic-auth` → `session-auth` → `oauth` ← **次はここから** |
+| 2 | 右のわき道: Web Security（Authentication の下） | ハッシュ・HTTPS・CORS・CSP・OWASP・サーバーの守り | `web-security` |
+| 3 | 本道: Caching | Redis・HTTP キャッシュ | `cache` |
+| 4 | 本道: Learn about Web Servers | Nginx | まだ表に無い。その話題に来たら §2.5 に行を足す |
+| 5 | 本道: AI in Development（10〜12） | LLM のしくみ・AI を使う機能（Streaming・Function Calling） | 同上 |
 
-- ロードマップの順番は、`https://roadmap.sh/api/v1-official-roadmap/backend` の JSON から取れる（`nodes` のうち `type` が `topic` のものを `position.y` の小さい順に並べる）。**推測で順番を書かない**
+- **ロードマップの形**: 真ん中の本道（線でつながった topic）は「Learn about APIs → Caching → Learn about Web Servers → AI」。右側に、線でつながっていないわき道のかたまりが「API の形 → Authentication → Web Security」と縦に並ぶ。高さだけで数えると Caching が Web Security より上だが、**わき道の中で認証のすぐ下が Web Security** なので、認証のあとに続けて扱う（読み手の決定、2026-11-24）
+- ロードマップの順番と印は、`https://roadmap.sh/api/v1-official-roadmap/backend` の JSON から取れる（`nodes` の `position.y` で高さ、`edges` でつながり、`data.legend` で印）。**推測で順番を書かない**
+- **印の使い方**: 紫（Personal Recommendation）は扱う。灰色（Order not strict / Learn anytime）は飛ばし、読み手が望んだときだけ足す。済んでいるもの（REST・JSON APIs・JWT・Token・OpenAPI）は飛ばす
 - 12 のあとは、AWS・Terraform・DevOps を挟んでから 14 以降に戻る（読み手の学習計画。13 CI/CD は DevOps でまとめて扱う）。14 以降もこのリポジトリで扱うかは、そのとき決める
 - 新しい行を足すときは、`docs/ext/_index.md` の表も同じに直す
 
@@ -605,7 +611,7 @@ v1 の「コピペ可。ただし1行変える」は**やめた**。コピペで
 
 **(c) ステップの最後は「次のなぜ」を残して終える** — 答えを全部渡して終えない。**次の問いが立った状態**で終える（§0.5.4 終わりの4）。`⏭️ 後で回収` も、そのための道具。
 
-**(d) まとまりの最後に、なぜなぜの鎖を1枚の図にする** — 部の最後、または関連する MX のまとまり（例: 認証の5つ）の最後に、問いと答えを縦につないだ図を置く。ばらばらに覚えたものが1本道だったと分かるのが目的。
+**(d) まとまりの最後に、なぜなぜの鎖を1枚の図にする** — 部の最後、または関連する MX のまとまり（例: 認証の3つ）の最後に、問いと答えを縦につないだ図を置く。ばらばらに覚えたものが1本道だったと分かるのが目的。
 
 **(e) どこで掘るのをやめるか** — 次のどちらかに当たったら止める。
 
@@ -815,7 +821,7 @@ roadmap.sh のどのプロジェクトでも `MP: <slug>` で生成できる形�
 2. **何が新しく必要になるか**（Redis コンテナなど）を最初に明示
 3. 以降は M1 と同じ構成（§0.5 のチャンクの型と上限、初出2つまで、🧒 かみくだくと、❓ この回の問い、`?:` 案内）
 4. ステップ数が3を超えるなら、`MX: celery 1` のように分割する
-5. **前の MX とつなぐ。** 認証の5つのように順番がある MX では、前の MX の「⏭️ 次の問い」を、次の MX の最初の `❓ この回の問い` にする（§4.14）
+5. **前の MX とつなぐ。** 認証の3つ → `web-security` のように順番がある MX では、前の MX の「⏭️ 次の問い」を、次の MX の最初の `❓ この回の問い` にする（§4.14）
 
 出力先は `docs/ext/<name>.md`。
 
