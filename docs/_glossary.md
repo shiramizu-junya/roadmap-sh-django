@@ -137,3 +137,7 @@
 | `Record<K, V>` | TypeScript の組み込み型 | `K` の値を全部キーに持つ辞書の型。キーが1つでも欠けるとビルドが止まる | 第4部-4 |
 | `HttpError` の `detail` | Ninja の `HttpError(status, message)` の応答 | `raise HttpError(409, "理由")` は `{"detail": "理由"}` を返す。画面はこの `detail` を読んで、利用者に理由を見せる | 第4部-5 |
 | オプショナルチェーン | optional chaining（`?.`） | `a?.b` は、`a` が `null` か `undefined` なら `undefined`、そうでなければ `a.b`。途中が空でも落ちない | 第4部-5 |
+| Basic 認証 | HTTP Basic authentication | 窓口に来るたびに、名前と合言葉を手紙の `Authorization` 欄に書いて送る入り方。身分証は作らない。窓口は毎回、台帳を引いて照らし合わせる | MX basic-auth-1 |
+| `HttpBasicAuth` | `ninja.security.HttpBasicAuth` | Basic 認証の係の「型」。手紙から名前と合言葉を取り出すところまでは型がやる。照らし合わせ方（`authenticate`）だけ自分で書く | MX basic-auth-1 |
+| `curl -u` | curl の `--user` | `-u 名前:合言葉` で、curl が Basic 認証の形にして送ってくれる | MX basic-auth-1 |
+| `AnonymousUser` | `django.contrib.auth.models.AnonymousUser` | 「名無しさん」。ログインしていないとき `request.user` に入る。`id` は `None` | MX basic-auth-1 |

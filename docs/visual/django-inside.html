@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Django の中の図</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --ink: #1f2328; --sub: #59636e; --line: #d0d7de;
+    --hi: #fff3c4; --hi-line: #d4a72c; --run: #dbeafe; --run-line: #2f6fdd;
+    --stop: #ffe0e0; --stop-line: #d1242f; --ok: #dcfce7; --ok-line: #1a7f37;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --card: #1f2328; --ink: #e6edf3; --sub: #9198a1; --line: #3d444d;
+      --hi: #3b3113; --hi-line: #d4a72c; --run: #13274a; --run-line: #4c8dff;
+      --stop: #3d1518; --stop-line: #f85149; --ok: #12301d; --ok-line: #3fb950;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; background: var(--bg); color: var(--ink); line-height: 1.7; }
+  header, main { max-width: 1080px; margin: 0 auto; padding: 16px 20px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 4px; }
+  h2 { font-size: 1.1rem; margin: 28px 0 8px; }
+  .sub { color: var(--sub); font-size: .9rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  button { font: inherit; font-size: .9rem; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button[aria-pressed="true"] { border-color: var(--run-line); outline: 2px solid var(--run-line); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .question { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 8px 0 12px; }
+  .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+  .part { position: relative; background: var(--card); border: 2px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; transition: background .25s, border-color .25s; }
+  .part:hover { border-color: var(--sub); }
+  .part .name { font-weight: 600; }
+  .part .file { color: var(--sub); font-size: .82rem; font-family: ui-monospace, monospace; }
+  .part .note { font-size: .85rem; margin-top: 2px; }
+  .part.changed { background: var(--hi); border-color: var(--hi-line); }
+  .part.changed::after { content: "この回で変わった"; position: absolute; top: -10px; right: 10px; font-size: .72rem; background: var(--hi-line); color: #000; padding: 0 6px; border-radius: 6px; }
+  .part.selected { outline: 3px solid var(--run-line); }
+  .part.running { background: var(--run); border-color: var(--run-line); }
+  .part.stopped { background: var(--stop); border-color: var(--stop-line); }
+  .part.reached { background: var(--ok); border-color: var(--ok-line); }
+  .arrow { text-align: center; color: var(--sub); font-size: .9rem; height: 26px; line-height: 26px; }
+  .msg { min-height: 2.2em; margin: 10px 0; padding: 8px 12px; border-radius: 8px; background: var(--card); border: 1px dashed var(--line); }
+  aside { position: sticky; top: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  aside h3 { margin: 0 0 6px; font-size: 1rem; }
+  aside dt { font-weight: 600; font-size: .85rem; color: var(--sub); margin-top: 8px; }
+  aside dd { margin: 2px 0 0; font-size: .92rem; }
+  code { font-family: ui-monospace, monospace; font-size: .88em; background: color-mix(in srgb, var(--line) 35%, transparent); padding: 0 4px; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; background: var(--card); font-size: .9rem; }
+  th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: color-mix(in srgb, var(--line) 30%, transparent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Django の中の図</h1>
+  <div class="sub">ステップのボタンで、その時点の図になります。黄色はその回で変わった所。部品をクリックすると説明が出ます。「▶」のボタンで、リクエストが通る道を見られます。</div>
+  <div class="bar" id="steps" aria-label="ステップ"></div>
+</header>
+
+<main>
+  <div class="layout">
+    <section>
+      <div class="question" id="question"></div>
+      <div class="bar" id="scenarios" aria-label="流してみる"></div>
+      <div class="msg" id="msg" aria-live="polite">部品をクリックするか、「▶」のボタンを押してください。</div>
+      <div class="flow" id="flow"></div>
+    </section>
+    <aside id="detail">
+      <h3>部品の説明</h3>
+      <div class="sub">左の図の部品をクリックすると、ここに出ます。</div>
+    </aside>
+  </div>
+
+  <h2>成長の記録</h2>
+  <table>
+    <thead><tr><th>ステップ</th><th>✅ できるようになったこと</th><th>📝 ひとこと（docs/notes.md から写す）</th></tr></thead>
+    <tbody id="growth"></tbody>
+  </table>
+
+  <h2>覚えた 🔎 調べ方</h2>
+  <table>
+    <thead><tr><th>知りたいこと</th><th>打つ / 見る</th><th>覚えた回</th></tr></thead>
+    <tbody id="lookups"></tbody>
+  </table>
+</main>
+
+<script>
+// ===== 部品（図の箱）。上から順に、リクエストが通る道 =====
+const PARTS = [
+  { id: "client", name: "窓口に来た人（curl / ブラウザ）", file: "ターミナル / ブラウザ",
+    formal: "HTTP クライアント（HTTP client）",
+    plain: "手紙（リクエスト）を書いて送る人。curl の -u を付けると、手紙に名前と合言葉を書き添える。",
+    more: "Basic 認証では、手紙の Authorization という欄に「Basic と、名前:合言葉を変換した文字」を書く。毎回書く。",
+    lookup: "curl -s &lt;URL&gt; -w ' %{http_code}\\n' で、返事と番号を見る" },
+  { id: "mw", name: "ミドルウェア（窓口の順路の共通の検査）", file: "config/settings.py の MIDDLEWARE",
+    formal: "ミドルウェア（middleware）。AuthenticationMiddleware など",
+    plain: "どの窓口に行く手紙も、必ず通る検査の列。AuthenticationMiddleware が request.user を用意する。",
+    more: "AuthenticationMiddleware は Cookie（セッション）を見て、ログイン中の人を request.user に入れる。Cookie が無いと「名無しさん」（AnonymousUser）を入れる。名無しさんの id は None。",
+    lookup: "runserver のターミナルの「GET ... -> 401 (0.2 ms)」の行は、2-5 で作った時間を測るミドルウェアが出している" },
+  { id: "url", name: "受付の案内表（URL）", file: "config/urls.py",
+    formal: "URLconf（URL ルーティング）",
+    plain: "住所の頭が api/ なら、Ninja の受付に回す。",
+    more: "path(\"api/\", api.urls) の1行で、/api/ から始まる手紙はすべて Ninja に回る。",
+    lookup: "住所が無いと 404。http://localhost:8000/api/docs で、登録された住所の一覧が見られる" },
+  { id: "ninja", name: "Ninja の受付", file: "config/api.py → accounts/api.py",
+    formal: "NinjaAPI / Router",
+    plain: "/auth で始まる住所を accounts/api.py の窓口に回す。窓口に係（auth=）が付いていれば、先に係を呼ぶ。",
+    more: "係が何か返せば通す（返した値は request.auth に入る）。None なら、ビューを呼ばずに 401 を返す。",
+    lookup: "/api/openapi.json の securitySchemes に、使っている係の種類（bearer / basic）が出る" },
+  { id: "authc", name: "認証係（auth=）", file: "accounts/auth.py の BasicAuth / ninja_jwt の JWTAuth",
+    formal: "認証クラス（authentication class）。ninja.security.HttpBasicAuth を継承",
+    plain: "ビューより前に「だれが来たか」を確かめる係。BasicAuth は名前と合言葉、JWTAuth は身分証を見る。",
+    more: "BasicAuth は (1) 手紙から名前と合言葉を取り出す（型がやる）(2) Django の authenticate() で台帳と照らし合わせる (3) 合えば request.user に本人を書き、User を返す。合わなければ None を返す → 401。",
+    lookup: "係の中身は .venv/lib/python3.14/site-packages/ninja/security/http.py の class HttpBasicAuth" },
+  { id: "view", name: "担当職員（ビュー関数）", file: "accounts/api.py の get_my_profile_basic",
+    formal: "ビュー関数（view function）",
+    plain: "request.user.id を使って、本人のプロフィールを探して返す。",
+    more: "ビューは「だれか」を自分で確かめない。係が request.user に書いた人をそのまま信じる。だから係が書き忘れると、名無しさん（id = None）で探してしまう。",
+    lookup: "404 のときは、runserver のターミナルの SQL の WHERE を見る" },
+  { id: "orm", name: "台帳を引く職員（ORM）", file: "Django の ORM",
+    formal: "ORM（Object-Relational Mapping）",
+    plain: "Python で書いた「探して」を SQL に直して、MySQL に聞く。",
+    more: "Basic 認証では1回の手紙で SELECT が2本出る。1本目: 名前で accounts_user を引く（照合）。2本目: user_id で accounts_profile を引く（ビュー）。",
+    lookup: "runserver のターミナルに SQL が出る（settings.py の SQL_LOG）" },
+  { id: "db", name: "台帳（MySQL）", file: "accounts_user / accounts_profile",
+    formal: "データベースのテーブル（table）",
+    plain: "利用者の名前と、合言葉のハッシュ（元に戻せない変換）がしまってある。",
+    more: "合言葉そのものはしまっていない。届いた合言葉を同じやり方で変換して、しまってある値と比べる。",
+    lookup: "runserver のターミナルの SQL の FROM のあとが、引いたテーブルの名前" },
+];
+
+// ===== ステップ =====
+const STEPS = [
+  { id: "all", label: "全体（本編のおわり）",
+    question: "本編のおわり。<code>/api/auth/me</code> は、身分証（JWT）を JWTAuth が確かめてから、ビューが本人のプロフィールを返す。",
+    changed: [],
+    notes: { authc: "JWTAuth（身分証を見る）", view: "get_my_profile（/me）" },
+    scenarios: [
+      { label: "▶ 身分証あり（/me）", path: ["client", "mw", "url", "ninja", "authc", "view", "orm", "db"], end: "ok",
+        says: { client: "Authorization: Bearer <身分証> を付けて送る", authc: "JWTAuth が署名と期限を確かめ、request.user に本人を書く", db: "200 本人のプロフィールが返る" } },
+    ] },
+  { id: "basic-auth-1", label: "basic-auth-1",
+    question: "❓ 身分証（JWT）を使わないなら、一番かんたんな入り方は？ → 毎回、名前と合言葉を送る（Basic 認証）",
+    changed: ["authc", "view"],
+    notes: { authc: "BasicAuth（名前と合言葉を見る）← 自分で作った", view: "get_my_profile_basic（/me-basic）← 足した" },
+    scenarios: [
+      { label: "▶ -u なし", path: ["client", "mw", "url", "ninja", "authc"], end: "stop",
+        says: { client: "名前も合言葉も書かずに送る", authc: "取り出せない → None → 401。ビューまで行かない（0.2 ms）" } },
+      { label: "▶ 正しい合言葉（③の前）", path: ["client", "mw", "url", "ninja", "authc", "view", "orm", "db"], end: "stop",
+        says: { mw: "Cookie が無いので、request.user に名無しさんを入れる", authc: "合言葉は合った。User を返す。でも request.user には書いていない",
+                view: "request.user.id は None", db: "WHERE user_id IS NULL → 0件 → 404" } },
+      { label: "▶ 正しい合言葉（③のあと）", path: ["client", "mw", "url", "ninja", "authc", "view", "orm", "db"], end: "ok",
+        says: { mw: "request.user に名無しさんを入れる", authc: "合言葉が合った → request.user を本人で上書きし、User を返す",
+                view: "request.user.id は本人の番号", db: "WHERE user_id = 2 → 見つかる → 200" } },
+    ] },
+];
+
+// ===== 成長の記録と調べ方 =====
+const GROWTH = [
+  { step: "basic-auth-1", can: ["Basic 認証が「毎回、名前と合言葉を送る」入り方だと説明できる", "係の返り値が User なら通る・None なら 401、と予想できる", "404 のとき、SQL の WHERE を見て原因を探せる"], note: "" },
+];
+const LOOKUPS = [
+  { want: "返事の番号", how: "curl -s &lt;URL&gt; -w ' %{http_code}\\n'", step: "Docker PJ2" },
+  { want: "なぜ止まったか", how: "runserver のターミナルの最後の1行（だれが : 何に怒っているか）", step: "Docker PJ2" },
+  { want: "なぜ 404 か（何で探したか）", how: "runserver のターミナルの SQL の WHERE", step: "basic-auth-1" },
+  { want: "Ninja の部品の中身", how: ".venv/lib/python3.14/site-packages/ninja/ の中のファイル", step: "basic-auth-1" },
+  { want: "登録された住所と係の一覧", how: "http://localhost:8000/api/docs", step: "basic-auth-1" },
+];
+
+// ===== 描画 =====
+const $ = (id) => document.getElementById(id);
+let current = STEPS[STEPS.length - 1];
+let timer = null;
+
+function renderSteps() {
+  $("steps").innerHTML = "";
+  for (const s of STEPS) {
+    const b = document.createElement("button");
+    b.textContent = s.label;
+    b.setAttribute("aria-pressed", String(s === current));
+    b.onclick = () => { current = s; render(); };
+    $("steps").append(b);
+  }
+}
+
+function renderFlow() {
+  $("flow").innerHTML = "";
+  PARTS.forEach((p, i) => {
+    if (i > 0) { const a = document.createElement("div"); a.className = "arrow"; a.textContent = "↓"; $("flow").append(a); }
+    const d = document.createElement("div");
+    d.className = "part" + (current.changed.includes(p.id) ? " changed" : "");
+    d.id = "part-" + p.id;
+    d.tabIndex = 0;
+    const note = current.notes[p.id] ? `<div class="note">${current.notes[p.id]}</div>` : "";
+    d.innerHTML = `<div class="name">${p.name}</div><div class="file">${p.file}</div>${note}`;
+    d.onclick = () => showDetail(p);
+    d.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showDetail(p); } };
+    $("flow").append(d);
+  });
+}
+
+function showDetail(p) {
+  document.querySelectorAll(".part.selected").forEach((e) => e.classList.remove("selected"));
+  $("part-" + p.id).classList.add("selected");
+  $("detail").innerHTML = `<h3>${p.name}</h3><dl>
+    <dt>正式名称</dt><dd>${p.formal}</dd>
+    <dt>🧒 かみくだくと</dt><dd>${p.plain}</dd>
+    <dt>もう少し詳しく</dt><dd>${p.more}</dd>
+    <dt>🔎 確かめるには</dt><dd>${p.lookup}</dd></dl>`;
+}
+
+function renderScenarios() {
+  $("scenarios").innerHTML = "";
+  for (const sc of current.scenarios) {
+    const b = document.createElement("button");
+    b.textContent = sc.label;
+    b.onclick = () => run(sc);
+    $("scenarios").append(b);
+  }
+}
+
+function clearRun() {
+  clearInterval(timer);
+  document.querySelectorAll(".part").forEach((e) => e.classList.remove("running", "stopped", "reached"));
+}
+
+function run(sc) {
+  clearRun();
+  let i = 0;
+  const step = () => {
+    if (i > 0) $("part-" + sc.path[i - 1]).classList.replace("running", "reached");
+    if (i >= sc.path.length) {
+      clearInterval(timer);
+      const last = $("part-" + sc.path[sc.path.length - 1]);
+      last.classList.remove("reached");
+      last.classList.add(sc.end === "ok" ? "reached" : "stopped");
+      return;
+    }
+    const id = sc.path[i];
+    $("part-" + id).classList.add("running");
+    const part = PARTS.find((p) => p.id === id);
+    $("msg").textContent = `${part.name}: ${sc.says[id] || "通過"}`;
+    i += 1;
+  };
+  step();
+  timer = setInterval(step, 900);
+}
+
+function renderTables() {
+  $("growth").innerHTML = GROWTH.map((g) =>
+    `<tr><td>${g.step}</td><td>${g.can.map((c) => "✅ " + c).join("<br>")}</td><td>${g.note || "（まだ）"}</td></tr>`).join("");
+  $("lookups").innerHTML = LOOKUPS.map((l) =>
+    `<tr><td>${l.want}</td><td><code>${l.how}</code></td><td>${l.step}</td></tr>`).join("");
+}
+
+function render() {
+  clearRun();
+  renderSteps();
+  $("question").innerHTML = current.question;
+  renderScenarios();
+  renderFlow();
+  $("msg").textContent = "部品をクリックするか、「▶」のボタンを押してください。";
+  $("detail").innerHTML = `<h3>部品の説明</h3><div class="sub">左の図の部品をクリックすると、ここに出ます。</div>`;
+}
+
+render();
+renderTables();
+</script>
+</body>
+</html>
