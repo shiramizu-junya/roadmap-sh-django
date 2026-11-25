@@ -7,6 +7,7 @@ from ninja_jwt.authentication import JWTAuth  # 追加
 from ninja_jwt.exceptions import TokenError
 from ninja_jwt.tokens import RefreshToken
 
+from .auth import BasicAuth
 from .models import Profile, User  # 追加
 
 # ログインまわりの API 一式。URL の頭（/auth）は config/api.py で決める
@@ -90,6 +91,11 @@ def register(request: HttpRequest, payload: RegisterIn):
 @router.get("/me", response=ProfileOut, auth=JWTAuth())
 def get_my_profile(request: HttpRequest):
     # user_id は一意なので、見つかるのは0件か1件
+    return get_object_or_404(Profile, user_id=request.user.id)
+
+
+@router.get("/me-basic", response=ProfileOut, auth=BasicAuth())
+def get_my_profile_basic(request: HttpRequest):
     return get_object_or_404(Profile, user_id=request.user.id)
 
 
