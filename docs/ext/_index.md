@@ -12,13 +12,13 @@
 | `drf` | DRF なら同じ API をどう書くか（比較のみ） | 第2部まで | djangorestframework | 1〜2 |
 | `basic-auth` | Basic 認証（毎回、名前と合言葉を送る）。なぜ使われなくなったか | 第2部まで | なし | 1〜2 |
 | `session-auth` | セッション認証（Cookie で入場券を持たせる）。CSRF の検査を戻す | `basic-auth` | なし（Django 標準の sessions） | 2〜3 |
-| `oauth` | OAuth 2.0（合言葉を渡さずに「許可」だけ渡す） | `session-auth` | Keycloak コンテナ | 3〜4 |
-| `oidc` | OpenID Connect（OAuth の上に「この人はだれか」を足す） | `oauth` | Keycloak コンテナ | 2〜3 |
-| `saml` | SAML（会社向けのシングルサインオン）。しくみが分かるところまで | `oidc` | Keycloak コンテナ | 1〜2 |
+| `oauth` | OAuth 2.0（合言葉を渡さずに「許可」だけ渡す）。最後の1ステップで OpenID Connect | `session-auth` | Keycloak コンテナ | 3〜4 |
+| `web-security` | ハッシュ（bcrypt など）・HTTPS と SSL/TLS・CORS・CSP・OWASP・サーバーの守り。`MX: web-security 1` のように分けて呼ぶ | `oauth` | なし | 5〜6 |
 
-**認証の5つは、上から順に呼ぶ。** 前のやり方で困ったことを、次のやり方が解決する順になっている。Token 認証・JWT は第2部（2-6）で済んでいる。
+**認証の3つは、上から順に呼ぶ。** 前のやり方で困ったことを、次のやり方が解決する順になっている。Token 認証・JWT は第2部（2-6）で済んでいる。認証のあとは `web-security`、その次に `cache`。
 
 **本編のあとは、roadmap.sh/backend を上から順に進める**（`docs/_prompt.md` §2.7）。次は `MX: basic-auth`。
+SAML・GraphQL・gRPC・SOAP は、ロードマップで「いつ学んでもよい」の印なので、今は入れない。
 
 **あとから足したくなったら、この表に行を追加する。**
 （多言語対応などは今回入れていないが、必要になれば追加できる）
