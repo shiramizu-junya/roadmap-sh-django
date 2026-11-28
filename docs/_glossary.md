@@ -144,3 +144,7 @@
 | Base64 | Base64（RFC 4648） | どんな文字も、決まった64種類の文字に言いかえるやり方。鍵は無く、だれでも元に戻せる。隠すためのものではない（暗号 = 鍵が無いと戻せない / ハッシュ = だれにも戻せない） | MX basic-auth-2 |
 | `curl -v` | curl の `--verbose` | 送った手紙（`>` の行）と返事（`<` の行）を全部見せる | MX basic-auth-2 |
 | PBKDF2 | Password-Based Key Derivation Function 2（Django の `PBKDF2PasswordHasher`） | 合言葉をハッシュにするやり方。同じ計算を何度もくり返して、わざと時間をかける。Django 5.2 では100万回 | MX basic-auth-2 |
+| Cookie | HTTP Cookie（`Set-Cookie` / `Cookie` ヘッダー） | サーバーが「次からこれを付けてきて」と渡す小さなメモ。ブラウザがしまい、同じサイトへ行くたびに自動で付けて送る | MX session-auth-1 |
+| `login()` | `django.contrib.auth.login(request, user)` | 「この人をログイン済みにして」と頼む命令。`django_session` に控えを書き、番号（`sessionid`）を Cookie で渡す。`authenticate()` は確かめるだけ | MX session-auth-1 |
+| `django_auth` | `ninja.security.django_auth`（`SessionAuth`） | ミドルウェアが Cookie から本人を見つけたか（`request.user.is_authenticated`）を確かめるだけの、Ninja の係 | MX session-auth-1 |
+| `curl -c` / `curl -b` | curl の `--cookie-jar` / `--cookie` | `-c` は受け取った Cookie をファイルにしまう。`-b` はしまった Cookie を付けて送る | MX session-auth-1 |

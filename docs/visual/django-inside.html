@@ -169,12 +169,25 @@ const STEPS = [
       { label: "▶ JWT 版を1回（約1 ms）", path: ["client", "mw", "url", "ninja", "authc", "orm", "db", "view"], end: "ok",
         says: { authc: "身分証の署名を確かめるだけ。合言葉は使わない", db: "本人を1回引く", view: "200（約1 ms）。100万回の計算はログインのときの1回だけ" } },
     ] },
+  { id: "session-auth-1", label: "session-auth-1",
+    question: "❓ 合言葉を見せるのは最初の1回だけにして、あとは窓口に覚えておいてもらうには？ → 控えを django_session に書き、番号（Cookie の sessionid）だけ渡す",
+    changed: ["mw", "authc", "db"],
+    notes: { mw: "SessionMiddleware が Cookie の sessionid を読み、AuthenticationMiddleware が本人を request.user に入れる", authc: "django_auth（本人が分かったかを見るだけ）", db: "django_session に控え（_auth_user_id）が1行" },
+    scenarios: [
+      { label: "▶ ログイン（控えを書く）", path: ["client", "mw", "url", "ninja", "view", "orm", "db"], end: "ok",
+        says: { client: "POST /session/login に名前と合言葉（この1回だけ）", view: "authenticate() で照らし合わせ（約95 ms）→ auth.login()", db: "INSERT INTO django_session → 返事に Set-Cookie: sessionid=番号" } },
+      { label: "▶ Cookie ありで呼ぶ（約1 ms）", path: ["client", "mw", "url", "ninja", "authc", "view", "orm", "db"], end: "ok",
+        says: { client: "Cookie: sessionid=番号 を付けて送る（合言葉は送らない）", mw: "番号で django_session を引き、本人を request.user に入れる", authc: "request.user.is_authenticated → 通す", db: "200。合言葉の計算は無し" } },
+      { label: "▶ Cookie なしで呼ぶ", path: ["client", "mw", "url", "ninja", "authc"], end: "stop",
+        says: { mw: "番号が無いので、request.user は名無しさん", authc: "ログインしていない → 401" } },
+    ] },
 ];
 
 // ===== 成長の記録と調べ方 =====
 const GROWTH = [
   { step: "basic-auth-1", can: ["Basic 認証が「毎回、名前と合言葉を送る」入り方だと説明できる", "係の返り値が User なら通る・None なら 401、と予想できる", "404 のとき、SQL の WHERE を見て原因を探せる"], note: "" },
   { step: "basic-auth-2", can: ["curl -v で、送った手紙の中身を見られる", "Base64・暗号・ハッシュのちがいを「戻せるのはだれか」で説明できる", "Basic 認証が使われなくなった理由を2つ言える（ばれやすい・毎回重い）"], note: "" },
+  { step: "session-auth-1", can: ["authenticate() と login() のちがいを説明できる", "Set-Cookie で番号が届き、次から Cookie で送られる流れを説明できる", "セッション認証が Basic より速い理由を言える"], note: "" },
 ];
 const LOOKUPS = [
   { want: "返事の番号", how: "curl -s &lt;URL&gt; -w ' %{http_code}\\n'", step: "Docker PJ2" },
@@ -185,6 +198,9 @@ const LOOKUPS = [
   { want: "送った手紙の中身", how: "curl -s -v ...（> の行が送った手紙、< の行が返事）", step: "basic-auth-2" },
   { want: "Base64 を元に戻す", how: "echo '文字' | base64 -d", step: "basic-auth-2" },
   { want: "1回の手紙にかかった時間", how: "runserver のターミナルの -> 200 (○○ ms)", step: "basic-auth-2" },
+  { want: "返事の見出し（Set-Cookie など）", how: "curl -s -i ...", step: "session-auth-1" },
+  { want: "Cookie をしまう / 送る", how: "curl -c ファイル ... / curl -b ファイル ...", step: "session-auth-1" },
+  { want: "サーバーが覚えている控え", how: "uv run python manage.py shell -c \"from django.contrib.sessions.models import Session; ...\"", step: "session-auth-1" },
 ];
 
 // ===== 描画 =====

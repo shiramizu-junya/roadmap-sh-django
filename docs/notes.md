@@ -7,3 +7,4 @@
 | --- | --- |
 | basic-auth-1 | |
 | basic-auth-2 | |
+| session-auth-1 | |

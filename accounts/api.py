@@ -1,8 +1,10 @@
+from django.contrib import auth
 from django.contrib.auth import authenticate
 from django.db import transaction
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404  # 追加
 from ninja import Field, Router, Schema, Status  # Field を追加
+from ninja.security import django_auth
 from ninja_jwt.authentication import JWTAuth  # 追加
 from ninja_jwt.exceptions import TokenError
 from ninja_jwt.tokens import RefreshToken
@@ -96,6 +98,20 @@ def get_my_profile(request: HttpRequest):
 
 @router.get("/me-basic", response=ProfileOut, auth=BasicAuth())
 def get_my_profile_basic(request: HttpRequest):
+    return get_object_or_404(Profile, user_id=request.user.id)
+
+
+@router.post("/session/login", response={200: UserOut, 401: ErrorOut})
+def session_login(request: HttpRequest, payload: LoginIn):
+    user = authenticate(request, username=payload.username, password=payload.password)
+    if user is None:
+        return Status(401, {"detail": "ユーザー名かパスワードが違います"})
+    auth.login(request, user)
+    return user
+
+
+@router.get("/me-session", response=ProfileOut, auth=django_auth)
+def get_my_profile_session(request: HttpRequest):
     return get_object_or_404(Profile, user_id=request.user.id)
 
 
