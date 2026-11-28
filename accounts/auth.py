@@ -4,4 +4,7 @@ from ninja.security import HttpBasicAuth
 
 class BasicAuth(HttpBasicAuth):
     def authenticate(self, request, username, password):
-        return auth.authenticate(request, username=username, password=password)
+        user = auth.authenticate(request, username=username, password=password)
+        if user is not None:
+            request.user = user
+        return user
