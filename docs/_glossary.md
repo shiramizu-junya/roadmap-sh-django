@@ -148,3 +148,6 @@
 | `login()` | `django.contrib.auth.login(request, user)` | 「この人をログイン済みにして」と頼む命令。`django_session` に控えを書き、番号（`sessionid`）を Cookie で渡す。`authenticate()` は確かめるだけ | MX session-auth-1 |
 | `django_auth` | `ninja.security.django_auth`（`SessionAuth`） | ミドルウェアが Cookie から本人を見つけたか（`request.user.is_authenticated`）を確かめるだけの、Ninja の係 | MX session-auth-1 |
 | `curl -c` / `curl -b` | curl の `--cookie-jar` / `--cookie` | `-c` は受け取った Cookie をファイルにしまう。`-b` はしまった Cookie を付けて送る | MX session-auth-1 |
+| `logout()` | `django.contrib.auth.logout(request)` | 「この人をログアウトさせて」と頼む命令。`django_session` の控えを消し、返事で Cookie を捨てさせる | MX session-auth-2 |
+| 204 No Content | HTTP 204 | 「うまくいった。返す中身は無い」。Ninja では `response={204: None}` と `Status(204, None)` | MX session-auth-2 |
+| `_auth_user_hash` | セッションの認証ハッシュ（session auth hash） | ログイン時に控えへ書く、合言葉から作ったしるし。合言葉を変えると合わなくなり、そのセッションは使えなくなる | MX session-auth-2 |

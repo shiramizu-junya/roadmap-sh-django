@@ -429,3 +429,331 @@ HTTP/1.1 200 OK
 🩺 詰まったら: Q1 動いてる？ / Q2 何て言ってる？ / Q3 呼んだら返事は来る？ のどれから聞く？
 ❓ 分からない言葉があれば `?: <言葉>` と送ってください。そこだけ説明して、`docs/_glossary.md` に追記します。
 ▶ **次**: `MX: session-auth 2` — ログアウトすると、何が消える？
+
+---
+
+## session-auth-2: ログアウトすると、何が消える？
+
+**❓ この回の問い**: session-auth-1 で、窓口は控え（`django_session` の1行）を持ち、本人には番号だけを渡した。
+→ **ログアウトしたら、控えはどうなる？ 番号を盗まれていたら？ JWT とはどうちがう？**
+
+**作るもの**: ログアウトの API（`POST /api/auth/session/logout`）
+**重要度**: 🔴 毎日使う — 「ログアウト」「ほかの端末からログアウト」「合言葉を変えたら全部ログアウト」は、どのサービスにもある
+**前ステップとの接続**: session-auth-1 の `session_login` と `/me-session` の横に1つ足す
+
+> 🧒 **かみくだくと**: **ログアウト**は、窓口が控えを**破って捨てる**こと。番号を持っていても、照らし合わせる控えが無いので、もう入れない。
+
+### 準備（毎回）
+
+session-auth-1 と同じ。
+
+### 🔁 前回の思い出し
+
+session-auth-1 で、`/me-session` を呼ぶたびに、サーバーは最初にどの台帳を引いていた？（「分からない」でよい）
+
+<details><summary>答え</summary>
+
+`django_session`。番号で控えを探し、中の `_auth_user_id` から本人を見つけていました。
+**毎回、台帳を引いている**。これが今日の答えの種になります。
+
+</details>
+
+### 🧭 全体の中のいま
+
+```
+curl → 【ミドルウェア（控えを引く）】→ 案内表 → Ninja → ビュー（auth.logout）→ ORM → 【MySQL django_session（1行消える）】
+```
+
+🖼️ `docs/visual/django-inside.html` で「session-auth-2」を押す。「▶ 古い番号で呼ぶ」を流して、どこで止まるかを見る。
+
+### 🗺️ 今日の地図
+
+```
+① ログアウトの窓口を作る   accounts/api.py   auth.logout() → 控えを消す
+② 古い番号で呼んでみる     コマンドだけ       ログアウト前にコピーした番号 → 401
+③ 合言葉を変えてみる       コマンドだけ       セッションは 401、JWT は 200 のまま
+```
+
+### 🛠️ 先に自分で決める
+
+だれかがあなたの番号（`sessionid`）をこっそりコピーしていた。あなたがログアウトしたあと、その人がコピーした番号で呼んだら？
+
+- **A**: 入れる（番号は本物だから）
+- **B**: 入れない
+- **C**: 5分だけ入れる
+
+<details><summary>考え方</summary>
+
+番号そのものには何も書いていない（ただのランダムな32文字）。本物かどうかは、**窓口の控えと照らし合わせて**初めて分かります。控えを捨てれば、どの番号もただの文字です。だから **B**。
+
+**C は JWT** です。身分証そのものに署名と期限が書いてあるので、窓口は控えを持っていません。捨てる控えが無いので、期限（5分）まで使えてしまいます。② と ③ で、両方を確かめます。
+
+</details>
+
+### session-auth-2-0. このステップの初出
+
+**Django**: `auth.logout()`（控えを消す）
+**Ninja**: `response={204: None}`（「中身なしで成功」と返す）
+
+---
+
+### チャンク①: ログアウトの窓口を作る（`accounts/api.py`）
+
+**🤔 先に考える**: ログアウトの窓口に、`auth=django_auth`（ログイン済みの人だけ通す係）は付ける？ 付けない？
+（「付ける」と思った人は、その予想を覚えておく。🧪 で確かめます）
+
+<details><summary>答え</summary>
+
+**今回は付けない**。付けると、今の段階では 403 で止まります（🧪 で見ます）。理由は session-auth-3 の話です。
+付けなくても困りません。`auth.logout()` は、ログインしていない人に呼んでも何もせず終わるだけです。
+
+</details>
+
+**🎯 書くもの**: `get_my_profile_session` のすぐ下に、ログアウトの窓口 `session_logout` を足す。住所は `/session/logout`（POST）。中身は2行: `auth.logout(request)` を呼び、`Status(204, None)`（中身なしで成功）を返す。`response` は `{204: None}`。
+
+**✍️ 自分で書く**（窓口の形は4回目、`auth.login` の兄弟なので、日本語だけで書く。止まったらヒントを開ける）
+
+<details><summary>ヒント1: 使う部品の名前</summary>
+
+- 飾り: `@router.post("/session/logout", response={204: None})`
+- 関数名: `session_logout`。引数は `request: HttpRequest` だけ（送られてくる中身が無い）
+- 中身: `auth.logout(request)` → `return Status(204, None)`。`Status` は 401 のときに使ったもの
+
+</details>
+
+<details><summary>答え合わせ（差分。前後2行つき）</summary>
+
+```diff
+ def get_my_profile_session(request: HttpRequest):
+     return get_object_or_404(Profile, user_id=request.user.id)
+
+
++@router.post("/session/logout", response={204: None})
++def session_logout(request: HttpRequest):
++    auth.logout(request)
++    return Status(204, None)
++
++
+ @router.patch("/me", response=ProfileOut, auth=JWTAuth())
+ def update_my_profile(request: HttpRequest, payload: ProfileIn):
+```
+
+</details>
+
+**▶️ 確かめる**: ログイン → 呼べる → ログアウト → もう呼べない。
+
+```bash
+B=localhost:8000/api/auth
+C=/tmp/session-taro.txt
+curl -s -c $C -X POST $B/session/login -H 'Content-Type: application/json' \
+  -d '{"username": "basic-taro", "password": "pass12345"}' -w ' %{http_code}\n'
+curl -s -b $C $B/me-session -w ' %{http_code}\n'
+curl -s -i -b $C -c $C -X POST $B/session/logout
+curl -s -b $C $B/me-session -w ' %{http_code}\n'
+```
+
+```
+{"id": 2, "username": "basic-taro"} 200
+{"user_id": 2, "bio": ""} 200
+HTTP/1.1 204 No Content
+...
+Set-Cookie:  sessionid=""; expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; SameSite=Lax
+...
+{"detail": "Unauthorized"} 401
+```
+
+✅ 検証済み: Python 3.14.3 / Django 5.2.17 / django-ninja 1.7.1（DB は SQLite で確認）
+
+ログアウトの返事は `Set-Cookie: sessionid=""` で、期限が **1970年**（とっくに過ぎた日）です。「その番号は捨ててね」というお願いです。`-c $C` を付けたので、curl はファイルから `sessionid` を消しました。
+
+**🔎 答えの見つけ方**: runserver のターミナルの SQL に `DELETE FROM "django_session"` が出ていれば、控えが消えた。
+
+**🔬 1行ずつ分解**
+
+| 部品 | 読み方（正式名称） | 意味 | 無いと / 変えるとどうなる |
+| --- | --- | --- | --- |
+| `response={204: None}` | 204 No Content | 「うまくいった。返す中身は無い」 | `{200: ...}` にすると、何か中身を返す形を決める必要がある |
+| `auth.logout(request)` | `django.contrib.auth.logout()` | 控えを `django_session` から消し、`request.user` を名無しさんに戻し、返事で Cookie を捨てさせる | 消すと、204 は返るが控えが残り、番号がまだ使える |
+| `return Status(204, None)` | 戻り値 | 204 と「中身なし」を返す | — |
+
+**📖 しくみ**
+- **何をしているか**: 窓口が控えを捨て、本人にも「番号を捨てて」と頼んだ
+- **なぜ2つやるか**: 本人の番号を消すだけでは、コピーされた番号が残る。**本当に効くのは控えを消すほう**（② で確かめる）
+- **どういう原理で動くか**: `auth.logout()` → セッションの `flush()` → `DELETE FROM django_session`（その番号の1行）→ 返事に、期限切れの `Set-Cookie: sessionid=""`
+
+> 📇 **`logout()`** — 正式名称: **`django.contrib.auth.logout(request)`**
+> かみくだくと: 「この人をログアウトさせて」と頼む命令。控えを消し、番号を捨てさせる。
+> 似た言葉との違い: `login()` = 控えを書く。`logout()` = 控えを消す。
+> この教材では: `session_logout` の中
+
+---
+
+### チャンク②: 古い番号で呼んでみる（コマンドだけ）
+
+**🤔 先に考える**: ログアウトの**前に**、番号のファイルをコピーしておく（盗まれた番号のつもり）。ログアウトのあと、コピーで呼んだら？（🛠️ の予想と同じでよい）
+
+**🎯 書くもの**: (1) ログイン (2) 番号のファイルを `cp` でコピー (3) ログアウト (4) コピーで `/me-session` (5) 控えの数を数える
+
+**✍️ 自分で書く**（`cp` 以外は ① と同じ形なので、穴うめ）
+
+```bash
+curl -s -c $C -X POST $B/session/login -H 'Content-Type: application/json' \
+  -d '{"username": "basic-taro", "password": "pass12345"}' -w ' %{http_code}\n'
+cp $C /tmp/session-stolen.txt
+curl -s -b $C -c $C -X POST $B/session/___ -w ' %{http_code}\n'
+curl -s -b /tmp/session-___.txt $B/me-session -w ' %{http_code}\n'
+uv run python manage.py shell -c "
+from django.contrib.sessions.models import Session; print(Session.objects.count())"
+```
+
+<details><summary>答え</summary>
+
+`logout` と `stolen`。
+
+</details>
+
+**▶️ 確かめる**
+
+```
+{"id": 2, "username": "basic-taro"} 200
+ 204
+{"detail": "Unauthorized"} 401
+0
+```
+
+✅ 検証済み（最後の数は、ちがってよい。session-auth-1 の控えが残っていれば、その分だけ多い。**ログアウトの前より1つ減った**ことを見る）
+
+コピーした番号は、文字としては本物と同じです。それでも 401。**照らし合わせる控えが、もう無い**からです。
+
+**🔎 答えの見つけ方**: 「番号は残っているのに入れない」ときは、番号ではなく**台帳**を見る（`Session.objects.count()` や、SQL の `django_session`）。
+
+**📖 しくみ**
+- **何をしているか**: 盗まれた番号でも、ログアウトすれば使えなくなることを確かめた
+- **なぜそうなるか**: セッション認証では、「本物かどうか」を決めるのは**窓口の控え**。番号はただの引き出しの番号
+- **JWT とのちがい**: JWT の身分証は、それだけで本物と分かる（署名つき）。窓口は控えを持たないので、**捨てる控えが無い**。渡した身分証は期限まで止められない
+
+---
+
+### チャンク③: 合言葉を変えてみる（コマンドだけ）
+
+**🤔 先に考える**: basic-auth-2 で、合言葉を変えても、前にもらった JWT の身分証は 200 のままだった。セッションの番号は、合言葉を変えたらどうなる？
+A: 200 のまま　B: 401 になる　（「分からない」でよい）
+
+**🎯 書くもの**: (1) セッションでログイン、JWT でもログイン (2) 両方で呼ぶ (3) shell で合言葉を変える (4) もう一度両方で呼ぶ (5) 合言葉を戻す
+
+**✍️ 自分で書く**（2-6 で使った `ACCESS=$(...)` と、shell の形を写す）
+
+```bash
+curl -s -c $C -X POST $B/session/login -H 'Content-Type: application/json' \
+  -d '{"username": "basic-taro", "password": "pass12345"}' -o /dev/null
+ACCESS=$(curl -s -X POST $B/login -H 'Content-Type: application/json' \
+  -d '{"username": "basic-taro", "password": "pass12345"}' \
+  | uv run python -c "import json, sys; print(json.load(sys.stdin)['access'])")
+curl -s -b $C $B/me-session -w ' %{http_code}\n'
+curl -s $B/me -H "Authorization: Bearer $ACCESS" -w ' %{http_code}\n'
+
+uv run python manage.py shell -c "
+from accounts.models import User
+u = User.objects.get(username='basic-taro'); u.set_password('newpass999'); u.save()"
+
+curl -s -b $C $B/me-session -w ' %{http_code}\n'
+curl -s $B/me -H "Authorization: Bearer $ACCESS" -w ' %{http_code}\n'
+```
+
+**▶️ 確かめる**
+
+```
+{"user_id": 2, "bio": ""} 200
+{"user_id": 2, "bio": ""} 200
+{"detail": "Unauthorized"} 401
+{"user_id": 2, "bio": ""} 200
+```
+
+✅ 検証済み（JWT の行は、ログインから5分以内に打つこと。5分過ぎると、期限切れで 401 になる）
+
+合言葉を変えたら、**セッションは 401、JWT は 200 のまま**。
+
+**確かめたら、合言葉を戻す**（ほかの回で `pass12345` を使うため）:
+
+```bash
+uv run python manage.py shell -c "
+from accounts.models import User
+u = User.objects.get(username='basic-taro'); u.set_password('pass12345'); u.save()"
+```
+
+**🔎 答えの見つけ方**: session-auth-1 でのぞいた控えの中身に、`_auth_user_hash` があった。これが答えの場所です。
+
+**📖 しくみ**
+- **何をしているか**: 合言葉を変えると、それまでのセッションが全部使えなくなることを確かめた
+- **なぜ必要か**: 「合言葉が漏れたかも」と思って変えたのに、盗まれた番号で入られ続けたら意味がない
+- **どういう原理で動くか**: ログインのとき、控えに `_auth_user_hash`（合言葉のハッシュから作った**しるし**）を書いておく → 毎回、ミドルウェアが「控えのしるし」と「今の合言葉から作ったしるし」を比べる → 合言葉が変わるとしるしが合わない → 名無しさん扱い → 401
+- **JWT は**: 身分証には合言葉のしるしが入っていない。だから署名と期限が正しければ通ってしまう（basic-auth-2 で見たとおり）
+
+**🧪 壊してみる**: ① の 🤔 で「付ける」と思った人へ。ログアウトの飾りに `auth=django_auth` を足して保存する。
+
+```python
+@router.post("/session/logout", response={204: None}, auth=django_auth)
+```
+
+ログインしてからログアウトを呼ぶ。204 になる？ 予想してから打つ。
+
+```bash
+curl -s -c $C -X POST $B/session/login -H 'Content-Type: application/json' \
+  -d '{"username": "basic-taro", "password": "pass12345"}' -o /dev/null
+curl -s -b $C -c $C -X POST $B/session/logout -w ' %{http_code}\n'
+curl -s -b $C $B/me-session -w ' %{http_code}\n'
+```
+
+```
+{"detail": "CSRF check Failed"} 403
+{"user_id": 2, "bio": ""} 200
+```
+
+runserver のターミナル:
+
+```
+Forbidden (CSRF token missing.): /api/auth/session/logout
+POST /api/auth/session/logout -> 403 (3.4 ms)
+```
+
+✅ 検証済み
+
+**読み方**: ログイン済みなのに 403。しかも、ログアウトできていない（次の呼び出しが 200）。`CSRF token missing`（CSRF の札が無い）と言っています。
+`django_auth` は、GET では何も言わなかったのに、POST では「札を見せて」と言ってきました。なぜ POST だけ？ これが次の回の問いです。**確かめたら、`auth=django_auth` を消して戻す。**
+
+---
+
+### session-auth-2-9. 終わり
+
+**✏️ 自分で地図を描く**（箱の数だけ）
+
+```
+① ＿＿＿＿＿＿＿＿＿＿＿＿　何を: ＿＿＿＿＿＿＿＿＿＿　なぜ: ＿＿＿＿＿＿＿＿＿＿
+② ＿＿＿＿＿＿＿＿＿＿＿＿　何を: ＿＿＿＿＿＿＿＿＿＿　なぜ: ＿＿＿＿＿＿＿＿＿＿
+③ ＿＿＿＿＿＿＿＿＿＿＿＿　何を: ＿＿＿＿＿＿＿＿＿＿　なぜ: ＿＿＿＿＿＿＿＿＿＿
+```
+
+<details><summary>答え合わせ</summary>
+
+```
+① ログアウトの窓口   何を: auth.logout() で控えを消す          なぜ: 番号を使えなくするため
+② 古い番号で呼んだ   何を: コピーした番号 → 401                なぜ: 本物かどうかは控えで決まると確かめるため
+③ 合言葉を変えた     何を: セッションは 401、JWT は 200 のまま  なぜ: 控えの _auth_user_hash が合わなくなるため
+```
+
+</details>
+
+**📝 ひとこと**: 「〜だと思っていたけど、実は〜」を1行。`docs/notes.md` に貯める。
+（例: 「ログアウトは本人の番号を消すことだと思っていたけど、実は窓口の控えを消すのが本体だった」）
+
+**✅ できるようになったこと**
+- [ ] ログアウトで何が消えるかを言える（`django_session` の1行）
+- [ ] 盗まれた番号でも、ログアウトすれば使えなくなる理由を言える
+- [ ] 「すぐ止められる」セッションと「期限まで止められない」JWT のちがいを、「控えを持つのはだれか」で説明できる
+
+**⏭️ 次の問い**: `django_auth` を付けた POST は、ログイン済みでも 403（`CSRF token missing`）になった。Cookie はブラウザが**勝手に**付けて送る。では、**ほかのサイトがあなたのブラウザに、こっそり POST させたら？**
+
+---
+🩺 詰まったら: Q1 動いてる？ / Q2 何て言ってる？ / Q3 呼んだら返事は来る？ のどれから聞く？
+❓ 分からない言葉があれば `?: <言葉>` と送ってください。そこだけ説明して、`docs/_glossary.md` に追記します。
+▶ **次**: `MX: session-auth 3` — ほかのサイトから、こっそり POST させられたら？（CSRF）

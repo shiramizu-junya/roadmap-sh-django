@@ -181,6 +181,18 @@ const STEPS = [
       { label: "▶ Cookie なしで呼ぶ", path: ["client", "mw", "url", "ninja", "authc"], end: "stop",
         says: { mw: "番号が無いので、request.user は名無しさん", authc: "ログインしていない → 401" } },
     ] },
+  { id: "session-auth-2", label: "session-auth-2",
+    question: "❓ ログアウトすると、何が消える？ → django_session の控えの1行。番号が残っていても、照らし合わせる控えが無いので 401",
+    changed: ["view", "db"],
+    notes: { view: "session_logout: auth.logout() で控えを消し、Set-Cookie: sessionid=\"\"（1970年に期限切れ）を返す", db: "DELETE FROM django_session（その番号の1行）" },
+    scenarios: [
+      { label: "▶ ログアウト", path: ["client", "mw", "url", "ninja", "view", "orm", "db"], end: "ok",
+        says: { client: "POST /session/logout（Cookie: sessionid=番号）", view: "auth.logout(request)", db: "DELETE FROM django_session → 204、番号を捨ててと返す" } },
+      { label: "▶ 古い番号で呼ぶ（盗まれた番号）", path: ["client", "mw", "url", "ninja", "authc"], end: "stop",
+        says: { client: "ログアウト前にコピーした番号を送る", mw: "その番号の控えが無い → request.user は名無しさん", authc: "ログインしていない → 401" } },
+      { label: "▶ 合言葉を変えたあとで呼ぶ", path: ["client", "mw", "url", "ninja", "authc"], end: "stop",
+        says: { mw: "控えはあるが、_auth_user_hash が今の合言葉と合わない → 名無しさん", authc: "401（JWT の /me は 200 のまま）" } },
+    ] },
 ];
 
 // ===== 成長の記録と調べ方 =====
@@ -188,6 +200,7 @@ const GROWTH = [
   { step: "basic-auth-1", can: ["Basic 認証が「毎回、名前と合言葉を送る」入り方だと説明できる", "係の返り値が User なら通る・None なら 401、と予想できる", "404 のとき、SQL の WHERE を見て原因を探せる"], note: "" },
   { step: "basic-auth-2", can: ["curl -v で、送った手紙の中身を見られる", "Base64・暗号・ハッシュのちがいを「戻せるのはだれか」で説明できる", "Basic 認証が使われなくなった理由を2つ言える（ばれやすい・毎回重い）"], note: "" },
   { step: "session-auth-1", can: ["authenticate() と login() のちがいを説明できる", "Set-Cookie で番号が届き、次から Cookie で送られる流れを説明できる", "セッション認証が Basic より速い理由を言える"], note: "" },
+  { step: "session-auth-2", can: ["ログアウトで何が消えるかを言える（django_session の1行）", "盗まれた番号でも、ログアウトすれば使えなくなる理由を言える", "すぐ止められるセッションと、期限まで止められない JWT のちがいを説明できる"], note: "" },
 ];
 const LOOKUPS = [
   { want: "返事の番号", how: "curl -s &lt;URL&gt; -w ' %{http_code}\\n'", step: "Docker PJ2" },
@@ -201,6 +214,7 @@ const LOOKUPS = [
   { want: "返事の見出し（Set-Cookie など）", how: "curl -s -i ...", step: "session-auth-1" },
   { want: "Cookie をしまう / 送る", how: "curl -c ファイル ... / curl -b ファイル ...", step: "session-auth-1" },
   { want: "サーバーが覚えている控え", how: "uv run python manage.py shell -c \"from django.contrib.sessions.models import Session; ...\"", step: "session-auth-1" },
+  { want: "控えが消えたか", how: "runserver の SQL の DELETE FROM \"django_session\" / Session.objects.count()", step: "session-auth-2" },
 ];
 
 // ===== 描画 =====

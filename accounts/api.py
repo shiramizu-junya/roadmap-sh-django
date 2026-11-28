@@ -115,6 +115,12 @@ def get_my_profile_session(request: HttpRequest):
     return get_object_or_404(Profile, user_id=request.user.id)
 
 
+@router.post("/session/logout", response={204: None})
+def session_logout(request: HttpRequest):
+    auth.logout(request)
+    return Status(204, None)
+
+
 @router.patch("/me", response=ProfileOut, auth=JWTAuth())
 def update_my_profile(request: HttpRequest, payload: ProfileIn):
     profile = get_object_or_404(Profile, user_id=request.user.id)
