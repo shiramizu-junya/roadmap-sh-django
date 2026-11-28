@@ -156,11 +156,25 @@ const STEPS = [
         says: { mw: "request.user に名無しさんを入れる", authc: "合言葉が合った → request.user を本人で上書きし、User を返す",
                 view: "request.user.id は本人の番号", db: "WHERE user_id = 2 → 見つかる → 200" } },
     ] },
+  { id: "basic-auth-2", label: "basic-auth-2",
+    question: "❓ 送った合言葉は、途中でどう見える？ → Base64 なので、だれでも元に戻せる。文字を知っていれば、だれでも本人になれる",
+    changed: ["client", "db"],
+    notes: { client: "Authorization: Basic YmFzaWMtdGFybzpwYXNzMTIzNDU=（curl -v の > の行で見える）", db: "password 列は pbkdf2_sha256$1000000$...（100万回くり返したハッシュ）" },
+    scenarios: [
+      { label: "▶ 盗み見た文字で送る", path: ["client", "mw", "url", "ninja", "authc", "view", "orm", "db"], end: "ok",
+        says: { client: "-u を使わず、見た文字を -H 'Authorization: Basic ...' で書いて送る", authc: "Base64 を戻すと basic-taro:pass12345。合っている → 本人と見なす",
+                db: "200。だれが書いた手紙かは、サーバーには分からない" } },
+      { label: "▶ Basic 版を1回（約95 ms）", path: ["client", "mw", "url", "ninja", "authc", "orm", "db", "view"], end: "ok",
+        says: { authc: "届いた合言葉を PBKDF2 で100万回くり返してハッシュにする（ここが重い）", db: "台帳のハッシュと比べる", view: "200（約95 ms）。次の手紙でも、また100万回" } },
+      { label: "▶ JWT 版を1回（約1 ms）", path: ["client", "mw", "url", "ninja", "authc", "orm", "db", "view"], end: "ok",
+        says: { authc: "身分証の署名を確かめるだけ。合言葉は使わない", db: "本人を1回引く", view: "200（約1 ms）。100万回の計算はログインのときの1回だけ" } },
+    ] },
 ];
 
 // ===== 成長の記録と調べ方 =====
 const GROWTH = [
   { step: "basic-auth-1", can: ["Basic 認証が「毎回、名前と合言葉を送る」入り方だと説明できる", "係の返り値が User なら通る・None なら 401、と予想できる", "404 のとき、SQL の WHERE を見て原因を探せる"], note: "" },
+  { step: "basic-auth-2", can: ["curl -v で、送った手紙の中身を見られる", "Base64・暗号・ハッシュのちがいを「戻せるのはだれか」で説明できる", "Basic 認証が使われなくなった理由を2つ言える（ばれやすい・毎回重い）"], note: "" },
 ];
 const LOOKUPS = [
   { want: "返事の番号", how: "curl -s &lt;URL&gt; -w ' %{http_code}\\n'", step: "Docker PJ2" },
@@ -168,6 +182,9 @@ const LOOKUPS = [
   { want: "なぜ 404 か（何で探したか）", how: "runserver のターミナルの SQL の WHERE", step: "basic-auth-1" },
   { want: "Ninja の部品の中身", how: ".venv/lib/python3.14/site-packages/ninja/ の中のファイル", step: "basic-auth-1" },
   { want: "登録された住所と係の一覧", how: "http://localhost:8000/api/docs", step: "basic-auth-1" },
+  { want: "送った手紙の中身", how: "curl -s -v ...（> の行が送った手紙、< の行が返事）", step: "basic-auth-2" },
+  { want: "Base64 を元に戻す", how: "echo '文字' | base64 -d", step: "basic-auth-2" },
+  { want: "1回の手紙にかかった時間", how: "runserver のターミナルの -> 200 (○○ ms)", step: "basic-auth-2" },
 ];
 
 // ===== 描画 =====

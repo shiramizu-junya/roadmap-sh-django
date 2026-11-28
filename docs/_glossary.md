@@ -141,3 +141,6 @@
 | `HttpBasicAuth` | `ninja.security.HttpBasicAuth` | Basic 認証の係の「型」。手紙から名前と合言葉を取り出すところまでは型がやる。照らし合わせ方（`authenticate`）だけ自分で書く | MX basic-auth-1 |
 | `curl -u` | curl の `--user` | `-u 名前:合言葉` で、curl が Basic 認証の形にして送ってくれる | MX basic-auth-1 |
 | `AnonymousUser` | `django.contrib.auth.models.AnonymousUser` | 「名無しさん」。ログインしていないとき `request.user` に入る。`id` は `None` | MX basic-auth-1 |
+| Base64 | Base64（RFC 4648） | どんな文字も、決まった64種類の文字に言いかえるやり方。鍵は無く、だれでも元に戻せる。隠すためのものではない（暗号 = 鍵が無いと戻せない / ハッシュ = だれにも戻せない） | MX basic-auth-2 |
+| `curl -v` | curl の `--verbose` | 送った手紙（`>` の行）と返事（`<` の行）を全部見せる | MX basic-auth-2 |
+| PBKDF2 | Password-Based Key Derivation Function 2（Django の `PBKDF2PasswordHasher`） | 合言葉をハッシュにするやり方。同じ計算を何度もくり返して、わざと時間をかける。Django 5.2 では100万回 | MX basic-auth-2 |
